@@ -51,7 +51,8 @@ java -jar target/db-mcp-0.1.0-SNAPSHOT.jar --spring.profiles.active=http   # htt
 }
 ```
 
-For Claude Code: `claude mcp add db-mcp -e DB_MCP_MASTER_PASSWORD=... -- java -jar /path/to/db-mcp-0.1.0-SNAPSHOT.jar`.
+For Claude Code: `claude mcp add db-mcp -e DB_MCP_MASTER_PASSWORD=... -- java -jar /path/to/db-mcp-0.1.0-SNAPSHOT.jar`. <br>
+OR `claude mcp add --scope user --transport http db-mcp http://127.0.0.1:8999/mcp`
 
 ### Docker (streamable HTTP, state survives restarts)
 
