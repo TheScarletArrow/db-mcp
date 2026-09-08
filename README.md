@@ -134,7 +134,10 @@ there; use the HTTP variant). A `local` entry shadows a `user` entry with the sa
 }
 ```
 
-Use the absolute path to `java` if it is not on Desktop's PATH (`which java`).
+
+For Claude Code: `claude mcp add db-mcp -e DB_MCP_MASTER_PASSWORD=... -- java -jar /path/to/db-mcp-0.1.0-SNAPSHOT.jar`. <br>
+OR `claude mcp add --scope user --transport http db-mcp http://127.0.0.1:8999/mcp`
+
 
 ### Docker
 
