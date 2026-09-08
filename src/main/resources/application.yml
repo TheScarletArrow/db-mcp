@@ -1,0 +1,51 @@
+spring:
+  application:
+    name: db-mcp
+  main:
+    banner-mode: off
+    # stdio transport by default: no HTTP server. Activate the 'http' profile for streamable-http.
+    web-application-type: none
+  ai:
+    mcp:
+      server:
+        name: db-mcp
+        version: 0.1.0
+        type: sync
+        stdio: true
+        request-timeout: 120s
+        capabilities:
+          tool: true
+          prompt: false
+          resource: false
+          completion: false
+        instructions: |
+          db-mcp gives access to several PostgreSQL and Oracle databases at once.
+          Workflow: call list_databases; if the database the user needs is missing, ask the user for its JDBC URL
+          and credentials and call register_database. Credentials are stored encrypted on the server and reused
+          in later sessions, so ask for them only once. Several databases often share one login/password:
+          check list_credentials and pass credential_alias instead of asking again. Never guess credentials.
+          Explore with list_schemas / list_tables / describe_table, then query with run_query (read-only).
+          Use the SQL dialect of the target engine (PostgreSQL vs Oracle).
+
+db-mcp:
+  vault:
+    directory: ${DB_MCP_HOME:${user.home}/.db-mcp}
+    master-password: ${DB_MCP_MASTER_PASSWORD:}
+  query:
+    allow-writes: ${DB_MCP_ALLOW_WRITES:false}
+    default-max-rows: 200
+    hard-max-rows: 5000
+    timeout: 30s
+    max-cell-length: 2000
+  pool:
+    max-size: 4
+    connection-timeout: 10s
+    idle-timeout: 5m
+
+logging:
+  level:
+    root: info
+    com.zaxxer.hikari: warn
+    io.github.thescarletarrow.dbmcp: info
+    # Spring AI's @McpTool scanner is a BeanPostProcessor; Spring logs a harmless eligibility warning for it.
+    org.springframework.context.support.PostProcessorRegistrationDelegate: error

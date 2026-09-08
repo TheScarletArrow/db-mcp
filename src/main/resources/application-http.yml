@@ -1,0 +1,16 @@
+# Streamable-HTTP transport: run with --spring.profiles.active=http
+spring:
+  main:
+    web-application-type: servlet
+  ai:
+    mcp:
+      server:
+        stdio: false
+        protocol: streamable
+        streamable-http:
+          mcp-endpoint: /mcp
+          keep-alive-interval: 30s
+
+server:
+  port: ${DB_MCP_PORT:8080}
+  address: ${DB_MCP_BIND:127.0.0.1}
