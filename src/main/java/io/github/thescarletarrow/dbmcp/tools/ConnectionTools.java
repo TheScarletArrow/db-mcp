@@ -39,7 +39,7 @@ public class ConnectionTools {
     }
 
     public record DatabaseView(String name, DatabaseType type, String url, String credentialAlias, String username,
-                               String description) {
+                               String description, boolean readOnly) {
     }
 
     public record RegistrationResult(DatabaseView database, String credentialsSource, ConnectionStatus connection) {
@@ -111,7 +111,9 @@ public class ConnectionTools {
                     2. username + password, which are stored under credential_alias (defaults to the database name);
                     3. neither: the server asks the user directly if the client supports elicitation, otherwise the tool \
                     returns an error telling you to ask the user.
-                    Never invent credentials. The connection is tested after registering and the result is returned.""",
+                    Never invent credentials. Databases are read-only by default (only run_query works); pass \
+                    read_only=false only when the user explicitly wants execute_statement on this database. \
+                    The connection is tested after registering and the result is returned.""",
             annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = false, idempotentHint = true,
                     openWorldHint = true))
     public RegistrationResult registerDatabase(
@@ -122,7 +124,9 @@ public class ConnectionTools {
             @McpToolParam(required = false, description = "Alias of stored credentials to reuse, or the alias to store new credentials under") String credentialAlias,
             @McpToolParam(required = false, description = "Database login (only when not reusing an alias)") String username,
             @McpToolParam(required = false, description = "Database password (only when not reusing an alias)") String password,
-            @McpToolParam(required = false, description = "Free-text note, e.g. 'DEV environment of the billing service'") String description) {
+            @McpToolParam(required = false, description = "Free-text note, e.g. 'DEV environment of the billing service'") String description,
+            @McpToolParam(required = false, description = "true (default): SELECT only. false: allow execute_statement on this "
+                    + "database (server must also run with db-mcp.query.allow-writes=true). Omitted on re-registration keeps the current value") Boolean readOnly) {
 
         DatabaseType dbType = resolveType(type, url);
         String alias = credentialAlias == null || credentialAlias.isBlank() ? name : credentialAlias;
@@ -144,9 +148,26 @@ public class ConnectionTools {
                     .map(Credential.CredentialSummary::alias).toList() + ") and call register_database again.");
         }
 
-        DatabaseDefinition saved = registry.saveDatabase(new DatabaseDefinition(name, dbType, url, alias, description));
+        Boolean effectiveReadOnly = readOnly != null ? readOnly
+                : registry.findDatabase(name).map(DatabaseDefinition::readOnly).orElse(true);
+        DatabaseDefinition saved = registry.saveDatabase(
+                new DatabaseDefinition(name, dbType, url, alias, description, effectiveReadOnly));
         log.info("Registered database '{}' ({}) with credentials '{}'", saved.name(), saved.type(), saved.credentialAlias());
         return new RegistrationResult(view(saved), source, probe(saved.name()));
+    }
+
+    @McpTool(name = "set_read_only",
+            description = "Switch a registered database between read-only (default, only run_query) and writable "
+                    + "(execute_statement allowed, if the server runs with db-mcp.query.allow-writes=true). "
+                    + "Confirm with the user before making a database writable; prefer keeping production read-only.",
+            annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = false, idempotentHint = true,
+                    openWorldHint = false))
+    public DatabaseView setReadOnly(
+            @McpToolParam(description = "Registered database name") String name,
+            @McpToolParam(description = "true = SELECT only, false = writes allowed") boolean readOnly) {
+        DatabaseDefinition updated = registry.setReadOnly(name, readOnly);
+        log.info("Database '{}' is now {}", updated.name(), updated.readOnly() ? "read-only" : "writable");
+        return view(updated);
     }
 
     @McpTool(name = "remove_database",
@@ -210,6 +231,6 @@ public class ConnectionTools {
 
     private DatabaseView view(DatabaseDefinition d) {
         String username = registry.findCredential(d.credentialAlias()).map(Credential::username).orElse(null);
-        return new DatabaseView(d.name(), d.type(), d.url(), d.credentialAlias(), username, d.description());
+        return new DatabaseView(d.name(), d.type(), d.url(), d.credentialAlias(), username, d.description(), d.readOnly());
     }
 }

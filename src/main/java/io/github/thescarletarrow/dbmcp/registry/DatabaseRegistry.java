@@ -96,6 +96,14 @@ public class DatabaseRegistry {
         return definition;
     }
 
+    /** Flips the read-only flag of a registered database and persists it. */
+    public synchronized DatabaseDefinition setReadOnly(String name, boolean readOnly) {
+        DatabaseDefinition updated = requireDatabase(name).withReadOnly(readOnly);
+        databases.put(updated.name(), updated);
+        persist();
+        return updated;
+    }
+
     public synchronized Optional<DatabaseDefinition> findDatabase(String name) {
         return Optional.ofNullable(databases.get(Names.normalize(name, "database name")));
     }

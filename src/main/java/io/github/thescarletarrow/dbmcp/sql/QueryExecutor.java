@@ -65,6 +65,10 @@ public class QueryExecutor {
         if (!settings.allowWrites()) {
             throw new IllegalStateException("Write statements are disabled. Start the server with db-mcp.query.allow-writes=true to enable execute_statement.");
         }
+        if (dataSources.definition(databaseName).readOnly()) {
+            throw new IllegalStateException("Database '" + databaseName + "' is registered as read-only. "
+                    + "Call set_read_only with readOnly=false (after confirming with the user) to allow writes on it.");
+        }
         String statement = SqlGuard.requireSingleStatement(sql);
         long started = System.nanoTime();
         try (Connection connection = dataSources.dataSource(databaseName).getConnection()) {

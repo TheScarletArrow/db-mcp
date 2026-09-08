@@ -65,6 +65,24 @@ class DatabaseRegistryTest {
     }
 
     @Test
+    void readOnlyByDefaultAndToggleIsPersisted() {
+        registry.saveCredential(new Credential("dev", "app", "pw"));
+        registry.saveDatabase(new DatabaseDefinition("x", DatabaseType.POSTGRESQL, "jdbc:postgresql://a/x", "dev", ""));
+        assertThat(registry.requireDatabase("x").readOnly()).isTrue();
+
+        registry.setReadOnly("x", false);
+        assertThat(newRegistry().requireDatabase("x").readOnly()).isFalse();
+        assertThatThrownBy(() -> registry.setReadOnly("missing", false)).isInstanceOf(NoSuchElementException.class);
+    }
+
+    @Test
+    void vaultsWrittenBeforeTheFlagExistedLoadAsReadOnly() {
+        String legacyJson = "{\"name\":\"old\",\"type\":\"ORACLE\",\"url\":\"jdbc:oracle:thin:@//h/S\",\"credentialAlias\":\"dev\",\"description\":\"\"}";
+        DatabaseDefinition legacy = JsonMapper.builder().build().readValue(legacyJson, DatabaseDefinition.class);
+        assertThat(legacy.readOnly()).isTrue();
+    }
+
+    @Test
     void databaseNeedsExistingCredential() {
         assertThatThrownBy(() -> registry.saveDatabase(
                 new DatabaseDefinition("x", DatabaseType.POSTGRESQL, "jdbc:postgresql://a/x", "nope", "")))
