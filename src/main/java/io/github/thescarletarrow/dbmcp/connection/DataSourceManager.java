@@ -73,6 +73,9 @@ public class DataSourceManager implements DataSourceProvider {
         config.setInitializationFailTimeout(1);
         config.setAutoCommit(false);
         config.setReadOnly(true);
+        // With autoCommit off the alive-test query would leave a transaction open on the lent connection;
+        // PostgreSQL then refuses setReadOnly(). Roll the internal query back so the connection is handed out idle.
+        config.setIsolateInternalQueries(true);
         log.info("Creating connection pool for database '{}' ({})", definition.name(), definition.type());
         return config;
     }

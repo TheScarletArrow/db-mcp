@@ -69,4 +69,15 @@ class PostgresContainerIT {
         assertThat(inspector.listSchemas("pg", false)).extracting(SchemaInspector.SchemaInfo::name).contains("public");
         assertThat(connectionTools.testConnection("pg").ok()).isTrue();
     }
+
+    @Test
+    void queryAfterPoolValidation() throws Exception {
+        connectionTools.registerDatabase(null, "pg-idle", postgres.getJdbcUrl(), null, "pg-dev", null, null, null);
+        assertThat(connectionTools.testConnection("pg-idle").ok()).isTrue();
+        // idle longer than Hikari's alive-bypass window, so the pool runs its test query before lending the connection
+        Thread.sleep(1_000);
+
+        QueryResult result = executor.query("pg-idle", "SELECT current_setting('transaction_read_only') AS ro", null);
+        assertThat(result.rows().getFirst().get(0)).isEqualTo("on");
+    }
 }
