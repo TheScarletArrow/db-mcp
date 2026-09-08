@@ -51,6 +51,26 @@ java -jar target/db-mcp-0.1.0-SNAPSHOT.jar --spring.profiles.active=http   # htt
 
 For Claude Code: `claude mcp add db-mcp -e DB_MCP_MASTER_PASSWORD=... -- java -jar /path/to/db-mcp-0.1.0-SNAPSHOT.jar`.
 
+### Docker (streamable HTTP, state survives restarts)
+
+```bash
+export DB_MCP_MASTER_PASSWORD='choose-a-strong-passphrase'
+docker compose up -d --build          # MCP endpoint: http://127.0.0.1:8080/mcp
+docker compose restart                # vault (URLs, logins, passwords) is still there
+```
+
+The image runs as a non-root user with `DB_MCP_HOME=/data`; `compose.yaml` mounts the named volume
+`db-mcp-data` there, so `vault.enc` (and `vault.key` when no master password is set) outlive container
+restarts, recreation and image upgrades. To use a bind mount instead, make the directory writable by
+uid `10001`. Databases on the Docker host are reachable as `host.docker.internal`.
+Health: `GET /actuator/health`. Client config for the HTTP transport:
+
+```json
+{ "mcpServers": { "db-mcp": { "type": "http", "url": "http://127.0.0.1:8080/mcp" } } }
+```
+
+The container can also serve stdio: `docker run -i --rm -v db-mcp-data:/data -e SPRING_PROFILES_ACTIVE= db-mcp:local`.
+
 ### Typical conversation
 
 1. "Connect to the orders DB at jdbc:postgresql://dev-host:5432/orders" → the assistant calls
@@ -72,6 +92,13 @@ For Claude Code: `claude mcp add db-mcp -e DB_MCP_MASTER_PASSWORD=... -- java -j
 | `db-mcp.query.max-cell-length` | `2000` | Longer text cells are clipped in results. |
 | `db-mcp.pool.max-size` / `connection-timeout` / `idle-timeout` | `4` / `10s` / `5m` | Per-database HikariCP settings. |
 | `DB_MCP_PORT`, `DB_MCP_BIND` (http profile) | `8080`, `127.0.0.1` | HTTP transport binding. |
+
+### Persistence
+
+Every `register_database` / `save_credentials` call is written through to `vault.enc` immediately, and the
+registry is rebuilt from that file on start-up, so URLs, logins and passwords are available again after a
+restart without asking the user. Keep the vault directory (and the master password or `vault.key`) safe:
+losing the key makes the vault unreadable.
 
 The vault file is a small JSON envelope (`kdf`, `salt`, `iv`, `ciphertext`); the whole payload (URLs,
 usernames, passwords) is encrypted and authenticated, so a tampered file is rejected. Passwords never

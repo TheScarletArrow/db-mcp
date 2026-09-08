@@ -8,6 +8,11 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import io.github.thescarletarrow.dbmcp.config.DbMcpProperties;
+import io.github.thescarletarrow.dbmcp.registry.DatabaseDefinition;
+import io.github.thescarletarrow.dbmcp.registry.DatabaseRegistry;
+import io.github.thescarletarrow.dbmcp.vault.SecretVault;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.ActiveProfiles;
@@ -43,6 +48,9 @@ class McpServerEndToEndTest {
 
     @LocalServerPort
     int port;
+
+    @Autowired
+    DbMcpProperties properties;
 
     private final JsonMapper json = JsonMapper.builder().build();
     private McpSyncClient client;
@@ -98,6 +106,26 @@ class McpServerEndToEndTest {
         assertThat(text(credentials)).contains("\"alias\":\"dev\"").contains("erp-dev").contains("orders-dev").doesNotContain("pw");
 
         assertThat(Files.readString(vaultDir.resolve("vault.enc"))).doesNotContain("pw").doesNotContain("jdbc:");
+    }
+
+    @Test
+    void restartedServerReloadsUrlsLoginsAndPasswords() {
+        client.callTool(new McpSchema.CallToolRequest("register_database", Map.of(
+                "name", "restart-pg", "url", "jdbc:postgresql://127.0.0.1:1/restart",
+                "credentialAlias", "restart-creds", "username", "keep_me", "password", "keep_me_too")));
+        client.callTool(new McpSchema.CallToolRequest("register_database", Map.of(
+                "name", "restart-ora", "url", "jdbc:oracle:thin:@//127.0.0.1:1/RESTART", "credentialAlias", "restart-creds")));
+
+        // Simulates a process restart: a brand-new vault + registry over the same directory, nothing in memory.
+        DatabaseRegistry reloaded = new DatabaseRegistry(new SecretVault(properties, json), event -> { });
+
+        DatabaseDefinition pg = reloaded.requireDatabase("restart-pg");
+        DatabaseDefinition ora = reloaded.requireDatabase("restart-ora");
+        assertThat(pg.url()).isEqualTo("jdbc:postgresql://127.0.0.1:1/restart");
+        assertThat(ora.url()).isEqualTo("jdbc:oracle:thin:@//127.0.0.1:1/RESTART");
+        assertThat(reloaded.credentialFor(pg).username()).isEqualTo("keep_me");
+        assertThat(reloaded.credentialFor(pg).password()).isEqualTo("keep_me_too");
+        assertThat(reloaded.credentialFor(ora)).isEqualTo(reloaded.credentialFor(pg));
     }
 
     @Test
