@@ -17,7 +17,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class QueryExecutorTest {
 
-    private static final H2DataSources DATA_SOURCES = new H2DataSources("qexec");
+    private static final H2DataSources DATA_SOURCES = new H2DataSources("qexec", false);
+    private static final H2DataSources READ_ONLY = new H2DataSources("qexec", true);
 
     @TempDir
     static Path dir;
@@ -64,6 +65,13 @@ class QueryExecutorTest {
         assertThatThrownBy(() -> executor.query("qexec", "DELETE FROM items", null)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> executor.execute("qexec", "DELETE FROM items")).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("allow-writes");
+    }
+
+    @Test
+    void readOnlyDatabaseRejectsWritesEvenWhenServerAllowsThem() {
+        QueryExecutor executor = new QueryExecutor(READ_ONLY, TestProperties.withWrites(dir));
+        assertThatThrownBy(() -> executor.execute("qexec", "DELETE FROM items")).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("read-only").hasMessageContaining("set_read_only");
     }
 
     @Test

@@ -14,10 +14,16 @@ import java.util.NoSuchElementException;
 public final class H2DataSources implements DataSourceProvider {
 
     private final String name;
+    private final boolean readOnly;
     private final JdbcDataSource dataSource;
 
     public H2DataSources(String name) {
+        this(name, true);
+    }
+
+    public H2DataSources(String name, boolean readOnly) {
         this.name = name;
+        this.readOnly = readOnly;
         this.dataSource = new JdbcDataSource();
         // A fake PostgreSQL URL keeps DatabaseDefinition validation happy; H2 is what actually answers.
         this.dataSource.setURL("jdbc:h2:mem:" + name + ";MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1");
@@ -36,6 +42,6 @@ public final class H2DataSources implements DataSourceProvider {
     @Override
     public DatabaseDefinition definition(String databaseName) {
         dataSource(databaseName);
-        return new DatabaseDefinition(name, DatabaseType.POSTGRESQL, "jdbc:postgresql://localhost/" + name, "test", "");
+        return new DatabaseDefinition(name, DatabaseType.POSTGRESQL, "jdbc:postgresql://localhost/" + name, "test", "", readOnly);
     }
 }

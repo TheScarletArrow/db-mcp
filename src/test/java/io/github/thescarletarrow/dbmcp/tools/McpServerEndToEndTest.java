@@ -78,7 +78,7 @@ class McpServerEndToEndTest {
     void exposesAllTools() {
         List<String> names = client.listTools().tools().stream().map(McpSchema.Tool::name).toList();
         assertThat(names).containsExactlyInAnyOrder("list_databases", "list_credentials", "save_credentials",
-                "remove_credentials", "register_database", "remove_database", "test_connection", "list_schemas",
+                "remove_credentials", "register_database", "remove_database", "set_read_only", "test_connection", "list_schemas",
                 "list_tables", "describe_table", "run_query", "execute_statement");
 
         McpSchema.Tool runQuery = client.listTools().tools().stream().filter(t -> t.name().equals("run_query")).findFirst().orElseThrow();
@@ -126,6 +126,28 @@ class McpServerEndToEndTest {
         assertThat(reloaded.credentialFor(pg).username()).isEqualTo("keep_me");
         assertThat(reloaded.credentialFor(pg).password()).isEqualTo("keep_me_too");
         assertThat(reloaded.credentialFor(ora)).isEqualTo(reloaded.credentialFor(pg));
+    }
+
+    @Test
+    void readOnlyFlagPerDatabase() throws Exception {
+        McpSchema.CallToolResult writable = client.callTool(new McpSchema.CallToolRequest("register_database", Map.of(
+                "name", "ro-test", "url", "jdbc:postgresql://127.0.0.1:1/ro", "username", "u", "password", "p",
+                "readOnly", false)));
+        assertThat(writable.isError()).isFalse();
+        assertThat(((Map<?, ?>) json.readValue(text(writable), Map.class).get("database")).get("readOnly")).isEqualTo(false);
+
+        // re-registering without the flag keeps the stored value
+        McpSchema.CallToolResult again = client.callTool(new McpSchema.CallToolRequest("register_database", Map.of(
+                "name", "ro-test", "url", "jdbc:postgresql://127.0.0.1:1/ro2", "credentialAlias", "ro-test")));
+        assertThat(((Map<?, ?>) json.readValue(text(again), Map.class).get("database")).get("readOnly")).isEqualTo(false);
+
+        McpSchema.CallToolResult toggled = client.callTool(new McpSchema.CallToolRequest("set_read_only", Map.of(
+                "name", "ro-test", "readOnly", true)));
+        assertThat(toggled.isError()).isFalse();
+        assertThat(json.readValue(text(toggled), Map.class).get("readOnly")).isEqualTo(true);
+
+        McpSchema.CallToolResult listed = client.callTool(new McpSchema.CallToolRequest("list_databases", Map.of()));
+        assertThat(text(listed)).contains("\"name\":\"ro-test\"").contains("\"readOnly\":true");
     }
 
     @Test

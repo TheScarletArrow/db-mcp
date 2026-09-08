@@ -10,7 +10,8 @@ databases at the same time**. Built with Spring Boot 4 / Spring AI 2 on Java 21.
 * When the MCP client supports *elicitation*, the server asks the user for the login/password itself;
   otherwise the tool returns an instruction for the assistant to ask.
 * Queries run read-only by default (read-only transaction, statement guard, row/cell limits, timeout).
-  Writes are opt-in.
+  Writes are opt-in twice: server-wide (`DB_MCP_ALLOW_WRITES=true`) and per database (`readOnly=false`),
+  so production can stay SELECT-only while a dev database accepts changes.
 * Transports: **stdio** (default, for Claude Desktop / Claude Code / IDE clients) and **streamable HTTP**.
 
 ## Tools
@@ -18,13 +19,14 @@ databases at the same time**. Built with Spring Boot 4 / Spring AI 2 on Java 21.
 | Tool | Purpose |
 |------|---------|
 | `list_databases` | Registered databases, their engine, URL and credential alias (never passwords). |
-| `register_database` | Add/update a database. Credentials: reuse `credentialAlias`, pass `username`/`password`, or let the server elicit them. Tests the connection and reports the result. |
+| `register_database` | Add/update a database. Credentials: reuse `credentialAlias`, pass `username`/`password`, or let the server elicit them. `readOnly` (default `true`) restricts the database to `run_query`. Tests the connection and reports the result. |
+| `set_read_only` | Flip a database between read-only and writable without re-registering it. |
 | `remove_database` | Unregister a database and close its pool. |
 | `test_connection` | Product/version, user and current schema of a database. |
 | `save_credentials` / `list_credentials` / `remove_credentials` | Manage reusable login/password sets. |
 | `list_schemas`, `list_tables`, `describe_table` | Catalog exploration through JDBC metadata (works for both engines). |
 | `run_query` | One read-only `SELECT`/`WITH`/`EXPLAIN` statement, capped rows, clipped long cells. |
-| `execute_statement` | One DML/DDL statement, only when `DB_MCP_ALLOW_WRITES=true`. |
+| `execute_statement` | One DML/DDL statement, only when `DB_MCP_ALLOW_WRITES=true` **and** the database is not read-only. |
 
 ## Build & run
 

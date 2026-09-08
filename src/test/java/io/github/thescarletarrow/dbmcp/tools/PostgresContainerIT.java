@@ -58,7 +58,7 @@ class PostgresContainerIT {
     @Test
     void registerAndQuery() throws Exception {
         ConnectionTools.RegistrationResult registration = connectionTools.registerDatabase(null, "pg", postgres.getJdbcUrl(),
-                null, "pg-dev", postgres.getUsername(), postgres.getPassword(), "testcontainer");
+                null, "pg-dev", postgres.getUsername(), postgres.getPassword(), "testcontainer", null);
         assertThat(registration.connection().ok()).isTrue();
         assertThat(registration.connection().product()).isEqualTo("PostgreSQL");
 
