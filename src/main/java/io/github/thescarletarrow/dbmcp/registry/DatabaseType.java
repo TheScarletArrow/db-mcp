@@ -9,17 +9,19 @@ import java.util.Optional;
  */
 public enum DatabaseType {
 
-    POSTGRESQL("jdbc:postgresql:", "org.postgresql.Driver", "SELECT 1"),
-    ORACLE("jdbc:oracle:", "oracle.jdbc.OracleDriver", "SELECT 1 FROM DUAL");
+    POSTGRESQL("jdbc:postgresql:", "org.postgresql.Driver", "SELECT 1", "SET TRANSACTION READ ONLY"),
+    ORACLE("jdbc:oracle:", "oracle.jdbc.OracleDriver", "SELECT 1 FROM DUAL", "SET TRANSACTION READ ONLY");
 
     private final String urlPrefix;
     private final String driverClassName;
     private final String validationQuery;
+    private final String readOnlyTransactionStatement;
 
-    DatabaseType(String urlPrefix, String driverClassName, String validationQuery) {
+    DatabaseType(String urlPrefix, String driverClassName, String validationQuery, String readOnlyTransactionStatement) {
         this.urlPrefix = urlPrefix;
         this.driverClassName = driverClassName;
         this.validationQuery = validationQuery;
+        this.readOnlyTransactionStatement = readOnlyTransactionStatement;
     }
 
     public String urlPrefix() {
@@ -32,6 +34,14 @@ public enum DatabaseType {
 
     public String validationQuery() {
         return validationQuery;
+    }
+
+    /**
+     * Statement that turns the current transaction read-only on the server itself. {@code Connection.setReadOnly}
+     * is only a hint - the Oracle driver ignores it outright - so queries ask the server for the guarantee too.
+     */
+    public String readOnlyTransactionStatement() {
+        return readOnlyTransactionStatement;
     }
 
     public boolean matchesUrl(String jdbcUrl) {

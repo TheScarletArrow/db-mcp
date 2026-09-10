@@ -20,6 +20,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Real PostgreSQL round trip. Skipped automatically when Docker is not available.
@@ -34,6 +35,7 @@ class PostgresContainerIT {
     static Path dir;
 
     static GenericApplicationContext context;
+    static DataSourceManager dataSources;
     static ConnectionTools connectionTools;
     static QueryExecutor executor;
     static SchemaInspector inspector;
@@ -44,7 +46,7 @@ class PostgresContainerIT {
         context.refresh();
         var properties = TestProperties.defaults(dir);
         var registry = new DatabaseRegistry(new SecretVault(properties, JsonMapper.builder().build()), context);
-        var dataSources = new DataSourceManager(registry, properties);
+        dataSources = new DataSourceManager(registry, properties);
         connectionTools = new ConnectionTools(registry, dataSources);
         executor = new QueryExecutor(dataSources, properties);
         inspector = new SchemaInspector(dataSources);
@@ -72,12 +74,33 @@ class PostgresContainerIT {
 
     @Test
     void queryAfterPoolValidation() throws Exception {
-        connectionTools.registerDatabase(null, "pg-idle", postgres.getJdbcUrl(), null, "pg-dev", null, null, null);
+        connectionTools.registerDatabase(null, "pg-idle", postgres.getJdbcUrl(), null, "pg-dev", null, null, null, null);
         assertThat(connectionTools.testConnection("pg-idle").ok()).isTrue();
         // idle longer than Hikari's alive-bypass window, so the pool runs its test query before lending the connection
         Thread.sleep(1_000);
 
         QueryResult result = executor.query("pg-idle", "SELECT current_setting('transaction_read_only') AS ro", null);
         assertThat(result.rows().getFirst().get(0)).isEqualTo("on");
+    }
+
+    @Test
+    void readOnlyDatabaseRefusesEveryWritePath() throws Exception {
+        connectionTools.registerDatabase(null, "pg-ro", postgres.getJdbcUrl(), null, "pg-dev", null, null, null, true);
+
+        // The guard stops the statement before it reaches the server ...
+        assertThatThrownBy(() -> executor.query("pg-ro", "SELECT 1 AS id INTO guard_probe", null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("INTO");
+        assertThatThrownBy(() -> executor.query("pg-ro", "SELECT nextval('guard_probe_seq')", null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("NEXTVAL");
+        // ... and a read-only database refuses execute_statement even on a server started with allow-writes=true
+        QueryExecutor writesEnabled = new QueryExecutor(dataSources, TestProperties.withWrites(dir));
+        assertThatThrownBy(() -> writesEnabled.execute("pg-ro", "CREATE TABLE guard_probe (id int)"))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("read-only");
+
+        // The transaction the server opens for run_query would have refused a write anyway.
+        assertThat(executor.query("pg-ro", "SELECT current_setting('transaction_read_only') AS ro", null)
+                .rows().getFirst().getFirst()).isEqualTo("on");
+        assertThat(executor.query("pg-ro", "SELECT to_regclass('guard_probe') AS created", null)
+                .rows().getFirst().getFirst()).isNull();
     }
 }

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
@@ -72,6 +73,56 @@ class QueryExecutorTest {
         QueryExecutor executor = new QueryExecutor(READ_ONLY, TestProperties.withWrites(dir));
         assertThatThrownBy(() -> executor.execute("qexec", "DELETE FROM items")).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("read-only").hasMessageContaining("set_read_only");
+    }
+
+    /**
+     * H2, like Oracle, hands out a writable connection even after {@code setReadOnly(true)} and does not know
+     * {@code SET TRANSACTION READ ONLY} - so these three prove that the statement guard alone keeps a read-only
+     * database intact, and that queries still work on an engine without server-side read-only transactions.
+     */
+    @Test
+    void readOnlyDatabaseRejectsSelectInto() {
+        QueryExecutor executor = new QueryExecutor(READ_ONLY, TestProperties.withWrites(dir));
+        assertThatThrownBy(() -> executor.query("qexec", "SELECT * INTO items_copy FROM items", null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("INTO");
+    }
+
+    @Test
+    void readOnlyDatabaseRejectsSequenceWritesDisguisedAsSelect() throws SQLException {
+        try (Connection c = DATA_SOURCES.dataSource("qexec").getConnection(); Statement s = c.createStatement()) {
+            s.execute("CREATE SEQUENCE IF NOT EXISTS guard_seq START WITH 1");
+            c.commit();
+        }
+        QueryExecutor executor = new QueryExecutor(READ_ONLY, TestProperties.withWrites(dir));
+
+        assertThatThrownBy(() -> executor.query("qexec", "SELECT nextval('guard_seq')", null))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        try (Connection c = DATA_SOURCES.dataSource("qexec").getConnection();
+             Statement s = c.createStatement();
+             ResultSet rs = s.executeQuery("SELECT nextval('guard_seq')")) {
+            rs.next();
+            assertThat(((Number) rs.getObject(1)).longValue()).as("the sequence was never advanced").isEqualTo(1L);
+        }
+    }
+
+    @Test
+    void readOnlyDatabaseRejectsFileWritesDisguisedAsSelect() {
+        Path leak = dir.resolve("leak.csv");
+        QueryExecutor executor = new QueryExecutor(READ_ONLY, TestProperties.withWrites(dir));
+
+        assertThatThrownBy(() -> executor.query("qexec", "SELECT CSVWRITE('" + leak + "', 'SELECT 1 AS a')", null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("CSVWRITE");
+
+        assertThat(leak).doesNotExist();
+    }
+
+    @Test
+    void queriesRunOnEnginesWithoutServerSideReadOnlyTransactions() throws SQLException {
+        QueryExecutor executor = new QueryExecutor(READ_ONLY, TestProperties.defaults(dir));
+        assertThat(executor.query("qexec", "SELECT count(*) FROM items", null).rowCount()).isEqualTo(1);
+        // the second call takes the "already known to be unsupported" shortcut instead of retrying the statement
+        assertThat(executor.query("qexec", "SELECT count(*) FROM items", null).rowCount()).isEqualTo(1);
     }
 
     @Test
