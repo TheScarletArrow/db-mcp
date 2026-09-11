@@ -9,9 +9,12 @@ databases at the same time**. Built with Spring Boot 4 / Spring AI 2 on Java 21.
   dev/test/stage environments): register the second database with the alias of the first.
 * When the MCP client supports *elicitation* (Claude Code does), the server asks the user for the
   login/password itself; otherwise the tool tells the assistant to ask.
-* Every database is **read-only by default** (read-only transaction, statement guard, row/cell limits,
-  timeout). Writes are opt-in twice: server-wide (`DB_MCP_ALLOW_WRITES=true`) and per database
-  (`readOnly=false`), so production stays SELECT-only while a dev database accepts changes.
+* Every database is **read-only by default** and a read-only database **cannot be written to at all**:
+  the statement guard rejects DML/DDL, `SELECT ... INTO`, write-through-SELECT routines (`nextval`,
+  `lo_import`, `dblink`, `DBMS_*`/`UTL_*`, ...) and statements smuggled in after a `;`, the transaction is
+  declared read-only on the server, and the connection is rolled back. Writes are opt-in twice: server-wide
+  (`DB_MCP_ALLOW_WRITES=true`) and per database (`readOnly=false`), so production stays SELECT-only while a
+  dev database accepts changes. Details: [Read-only enforcement](#read-only-enforcement).
 * Transports: **stdio** (default, for Claude Desktop / Claude Code / IDE clients) and **streamable HTTP**.
 
 Russian cheat sheet: see [Шпаргалка](#шпаргалка-ru) at the end.
@@ -71,10 +74,48 @@ Names and aliases: 1-64 chars of `a-z 0-9 . _ -`, case-insensitive.
   (columns, PK, FKs, indexes). Identifiers are case-normalized per engine; double-quote for exact match.
 * "How many orders per status this month?" → `run_query`. One SELECT/WITH/EXPLAIN per call, executed in a
   read-only transaction that is rolled back, 200 rows by default (`maxRows` up to 5000), long cells
-  clipped. Anything else (INSERT, DDL, `FOR UPDATE`, second statement after `;`) is rejected before it
-  reaches the database.
+  clipped. Anything else (INSERT, DDL, `FOR UPDATE`, `SELECT ... INTO`, second statement after `;`) is
+  rejected before it reaches the database - see [Read-only enforcement](#read-only-enforcement).
 * Writes: `execute_statement` runs one DML/DDL statement and commits, only when **both** hold:
   server started with `DB_MCP_ALLOW_WRITES=true` **and** the database has `readOnly=false`.
+
+## Read-only enforcement
+
+A database registered with `readOnly=true` (the default) accepts **no** insert, update, delete or DDL,
+through any tool and any wording of the statement. Three independent fences, because no single one holds
+on every engine:
+
+1. **The statement guard** (`SqlGuard`) - the only fence that works on all of them. `run_query` accepts a
+   single `SELECT`/`WITH`/`EXPLAIN`/`SHOW`/`VALUES` and rejects everything else *before* the database sees
+   it:
+   * DML/DDL and transaction control, including data-modifying CTEs (`WITH x AS (DELETE ... RETURNING ...)`)
+     and locking reads (`FOR UPDATE`);
+   * `SELECT ... INTO` and `INTO OUTFILE`, which create or fill a table while looking like a query;
+   * routines that write or reach outside the database even inside a plain `SELECT`: sequence bumps
+     (`nextval`, `setval`), large objects and files (`lo_import`, `lo_export`, `pg_read_file`, H2's
+     `CSVWRITE`/`FILE_WRITE`), server state (`pg_terminate_backend`, `pg_reload_conf`), sleeps and advisory
+     locks, calls that execute SQL passed to them as text (`dblink_exec`, `query_to_xml`), and every Oracle
+     `DBMS_*` / `UTL_*` / `OWA_*` package;
+   * a second statement after a `;`, including when it is hidden in a comment, a dollar-quoted string or
+     behind a backslash-escaped quote. String literals, quoted identifiers, `$tag$...$tag$`, Oracle
+     `q'{...}'` and comments are blanked out before keywords are scanned, so `'drop me'` is data, not a
+     verb - and anything that cannot be lexed unambiguously (an unterminated literal or comment, a
+     backslash in front of a closing quote) is rejected rather than guessed.
+2. **A read-only transaction on the server** - `run_query` issues `SET TRANSACTION READ ONLY` and always
+   rolls back. On PostgreSQL the server itself then refuses any write, which is what catches the one thing
+   no name-based check can see: a user-defined function that writes when it is selected from. Engines that
+   do not know the statement fall back to the other two fences (a one-off `WARN` line says so), and
+   `Connection.setReadOnly(true)` is set in every case - Oracle and H2 ignore it, PostgreSQL does not.
+3. **The per-database flag** - `execute_statement` checks `readOnly` before it even looks at the SQL, so a
+   read-only database never has a write statement built for it. Flip it with `set_read_only` (and the
+   server must also run with `DB_MCP_ALLOW_WRITES=true`).
+
+The guard is deliberately blunt: a column literally named `update`, `load` or `into` has to be quoted
+(`SELECT "into" FROM audit`), and read-only Oracle package functions such as `DBMS_LOB.getlength` are
+refused together with the writing ones. Rejections carry a message that says what to do instead.
+
+None of this replaces a SELECT-only database user for anything that matters (see
+[Persistence, backup, security](#persistence-backup-security)).
 
 ## Tools
 
@@ -216,6 +257,10 @@ in Spring's relaxed form (`DB_MCP_QUERY_TIMEOUT=60s`).
 | `Write statements are disabled ...` | Start the server with `DB_MCP_ALLOW_WRITES=true`. |
 | `Database 'x' is registered as read-only ...` | "Allow writes on x" (`set_read_only`). |
 | `Only read-only statements ... are allowed in run_query` | The statement is not a SELECT/WITH/EXPLAIN, or contains a second statement. Use `execute_statement` for writes. |
+| `'INTO' is not allowed in run_query ...` | `SELECT ... INTO` writes a table. Drop the INTO clause, or use `execute_statement` on a writable database. |
+| `Statement uses 'NEXTVAL' ...` (or `CSVWRITE`, `DBLINK`, `DBMS_...`) | A routine that writes or reaches outside the database; not allowed in `run_query` even inside a SELECT. |
+| `Statement contains 'LOAD', which is not allowed ...` | A column or alias collides with a keyword: double-quote it (`SELECT "load" FROM t`). |
+| `A backslash in front of a closing quote is ambiguous ...` | Write the literal with a doubled quote (`'it''s'`) or as `$$it's$$`. |
 | Claude Code does not see the server | `claude mcp list`; check the scope (`local` vs `user`) and that `java` is on PATH. Logs go to stderr: run the jar manually to see start-up errors. |
 | Query result says `truncated: true` | More rows than `maxRows`; add WHERE/LIMIT or ask for a bigger `maxRows` (max 5000). |
 
@@ -231,7 +276,8 @@ config/      DbMcpProperties          typed settings (db-mcp.*)
 vault/       VaultCipher, SecretVault  AES-GCM encryption, atomic owner-only file persistence
 registry/    DatabaseRegistry          databases + credential sets, write-through to the vault
 connection/  DataSourceManager         one lazily created HikariCP pool per database, evicted on change
-sql/         SqlGuard, QueryExecutor   read-only guard, limits, JSON-friendly value mapping
+sql/         SqlGuard, SqlMasker,      read-only guard (keyword + routine policy over masked SQL),
+             QueryExecutor             limits, read-only transactions, JSON-friendly value mapping
 metadata/    SchemaInspector           schemas / tables / columns / keys / indexes via DatabaseMetaData
 tools/       *Tools                    @McpTool endpoints exposed to the assistant
 ```
@@ -263,9 +309,12 @@ claude mcp list
 * «Пароль для алиаса orders-dev поменялся» → обновит и переподключит все базы с этим алиасом.
 * «Удали erp-dev».
 
-**Только чтение**: все базы read-only по умолчанию. Включить запись для одной базы:
-«Разреши запись в orders-dev» + сервер запущен с `DB_MCP_ALLOW_WRITES=true`.
-Вернуть обратно: «Сделай orders-dev только для чтения».
+**Только чтение**: все базы read-only по умолчанию. В такую базу нельзя ничего записать вообще:
+отклоняются INSERT/UPDATE/DELETE/DDL, `SELECT ... INTO`, функции-запись внутри SELECT (`nextval`,
+`lo_import`, `dblink`, `CSVWRITE`, пакеты `DBMS_*`/`UTL_*`) и второй запрос после `;` — в том числе
+спрятанный в комментарии или в строковом литерале (типичные SQL-инъекции). Подробно:
+[Read-only enforcement](#read-only-enforcement). Включить запись для одной базы: «Разреши запись в orders-dev»
++ сервер запущен с `DB_MCP_ALLOW_WRITES=true`. Вернуть обратно: «Сделай orders-dev только для чтения».
 
 **Где лежит**: `~/.db-mcp/vault.enc` (в Docker `/data`). Бэкап = скопировать папку. Забыли мастер-пароль:
 удалить `vault.enc` и зарегистрировать базы заново.

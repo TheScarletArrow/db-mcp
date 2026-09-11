@@ -2,6 +2,9 @@ package io.github.thescarletarrow.dbmcp.sql;
 
 import io.github.thescarletarrow.dbmcp.config.DbMcpProperties;
 import io.github.thescarletarrow.dbmcp.connection.DataSourceProvider;
+import io.github.thescarletarrow.dbmcp.registry.DatabaseDefinition;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -14,15 +17,25 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Runs SQL against a registered database with row limits, timeouts and JSON-friendly value mapping.
+ *
+ * <p>Reads are fenced three times over, because no single fence holds on every engine: {@link SqlGuard} rejects
+ * anything that is not plainly a single read, the transaction is declared read-only on the server, and the JDBC
+ * connection is put in read-only mode and always rolled back. Writes go through {@link #execute} only, which
+ * additionally requires the server-wide switch and a database that is not registered as read-only.
  */
 @Service
 public class QueryExecutor {
 
+    private static final Logger log = LoggerFactory.getLogger(QueryExecutor.class);
+
     private final DataSourceProvider dataSources;
     private final DbMcpProperties.Query settings;
+    private final Set<String> withoutReadOnlyTransactions = ConcurrentHashMap.newKeySet();
 
     public QueryExecutor(DataSourceProvider dataSources, DbMcpProperties properties) {
         this.dataSources = dataSources;
@@ -41,12 +54,14 @@ public class QueryExecutor {
     }
 
     public QueryResult query(String databaseName, String sql, Integer maxRows) throws SQLException {
+        DatabaseDefinition definition = dataSources.definition(databaseName);
         String statement = SqlGuard.requireReadOnly(sql);
         int limit = effectiveLimit(maxRows);
         long started = System.nanoTime();
         try (Connection connection = dataSources.dataSource(databaseName).getConnection()) {
             connection.setAutoCommit(false);
             connection.setReadOnly(true);
+            beginReadOnlyTransaction(connection, definition);
             try (Statement stmt = connection.createStatement()) {
                 configure(stmt, limit);
                 try (ResultSet rs = stmt.executeQuery(statement)) {
@@ -59,9 +74,32 @@ public class QueryExecutor {
     }
 
     /**
+     * Asks the server to make this transaction read-only, so that a statement the guard did not recognise as a
+     * write is still refused by the database. Best effort: engines that do not know the statement (or a driver
+     * that already opened the transaction read-only) leave the guard and the rollback as the remaining fences.
+     */
+    private void beginReadOnlyTransaction(Connection connection, DatabaseDefinition definition) throws SQLException {
+        String statement = definition.type().readOnlyTransactionStatement();
+        if (statement == null || withoutReadOnlyTransactions.contains(definition.name())) {
+            return;
+        }
+        try (Statement stmt = connection.createStatement()) {
+            stmt.setQueryTimeout(timeoutSeconds());
+            stmt.execute(statement);
+        } catch (SQLException e) {
+            withoutReadOnlyTransactions.add(definition.name());
+            log.warn("Database '{}' rejected '{}' ({}); read-only queries now rely on the SQL guard and the JDBC "
+                    + "read-only flag only", definition.name(), statement, e.getMessage());
+            connection.rollback(); // a failed statement can leave the transaction aborted (PostgreSQL)
+        }
+    }
+
+    /**
      * Executes a DML/DDL statement and commits. Only available when writes are enabled in configuration.
      */
     public UpdateResult execute(String databaseName, String sql) throws SQLException {
+        // Both switches are checked before the statement is even looked at: on a read-only database no write
+        // statement is ever sent, so nothing can slip through on a parsing quirk.
         if (!settings.allowWrites()) {
             throw new IllegalStateException("Write statements are disabled. Start the server with db-mcp.query.allow-writes=true to enable execute_statement.");
         }
@@ -91,8 +129,12 @@ public class QueryExecutor {
         return Math.min(limit, settings.hardMaxRows());
     }
 
+    private int timeoutSeconds() {
+        return (int) Math.max(1, settings.timeout().toSeconds());
+    }
+
     private void configure(Statement stmt, int limit) throws SQLException {
-        stmt.setQueryTimeout((int) Math.max(1, settings.timeout().toSeconds()));
+        stmt.setQueryTimeout(timeoutSeconds());
         if (limit > 0) {
             stmt.setMaxRows(limit + 1); // one extra row tells us whether the result was truncated
             stmt.setFetchSize(Math.min(limit + 1, 500));
