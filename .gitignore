@@ -8,3 +8,5 @@ target/
 # never commit a vault or key
 *.enc
 vault.key
+# local compose settings (may contain the master password)
+.env

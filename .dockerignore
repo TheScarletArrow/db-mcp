@@ -1,7 +1,5 @@
-target/
-.git/
-.idea/
-*.iml
-.mvn/wrapper/*.jar
-*.enc
-vault.key
+# Allowlist: the build stage needs nothing but the POM and the sources, so the
+# context stays at a few hundred KB (no .git, no target/, no vault files).
+*
+!pom.xml
+!src

@@ -1,23 +1,40 @@
+# Quick start:
+#   cp .env.example .env && $EDITOR .env
+#   docker compose up -d
+#
+# By default this builds the image locally. To run the published image instead
+# (no JDK, no Maven, no build), set DB_MCP_IMAGE/DB_MCP_PULL_POLICY in .env.
 services:
   db-mcp:
+    image: ${DB_MCP_IMAGE:-db-mcp:local}
     build: .
-    image: db-mcp:local
+    pull_policy: ${DB_MCP_PULL_POLICY:-missing}
     container_name: db-mcp
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:8080"        # MCP endpoint: http://127.0.0.1:8080/mcp
+      - "127.0.0.1:${DB_MCP_PORT:-8080}:8080"   # MCP endpoint: http://127.0.0.1:8080/mcp
     environment:
       # Strongly recommended: the vault key is derived from this passphrase.
       # Without it a random key file is generated once inside the volume (also persistent).
       DB_MCP_MASTER_PASSWORD: ${DB_MCP_MASTER_PASSWORD:-}
       DB_MCP_ALLOW_WRITES: ${DB_MCP_ALLOW_WRITES:-false}
-      # Uncomment to reach databases running on the Docker host by name `host.docker.internal`.
-      # JAVA_OPTS: ""
     volumes:
       # Named volume keeps vault.enc / vault.key across container restarts and image upgrades.
       - db-mcp-data:/data
+    # The image writes only to /data (and Tomcat's scratch dir in /tmp).
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    # Reach databases running on the Docker host by name `host.docker.internal`.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   db-mcp-data:

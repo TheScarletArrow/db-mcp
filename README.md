@@ -183,12 +183,20 @@ OR `claude mcp add --scope user --transport http db-mcp http://127.0.0.1:8999/mc
 ### Docker
 
 ```bash
-export DB_MCP_MASTER_PASSWORD='choose-a-strong-passphrase'
-docker compose up -d --build          # MCP endpoint: http://127.0.0.1:8080/mcp, health: /actuator/health
+cp .env.example .env                  # put your master password there, then:
+docker compose up -d                  # MCP endpoint: http://127.0.0.1:8080/mcp, health: /actuator/health
 docker compose logs -f                # logs
 docker compose restart                # vault (URLs, logins, passwords) is still there
 docker compose down                   # stops; the volume db-mcp-data keeps the vault
 docker compose down -v                # !!! also deletes the vault
+```
+
+`docker compose up -d` builds the image on first use. To skip the build entirely, point compose at the
+published image by uncommenting the last two lines of `.env`:
+
+```properties
+DB_MCP_IMAGE=ghcr.io/thescarletarrow/db-mcp:latest
+DB_MCP_PULL_POLICY=always
 ```
 
 Connect the client to the container:
@@ -197,10 +205,10 @@ Connect the client to the container:
 claude mcp add --scope user --transport http db-mcp http://127.0.0.1:8080/mcp
 ```
 
-or let the client start a container per session over stdio (same volume, so the same vault):
+or let the client start a container per session over stdio (same volume, so the same vault). `db-mcp:local`
+is what `docker compose` builds; `ghcr.io/thescarletarrow/db-mcp:latest` works the same without a build:
 
 ```bash
-docker build -t db-mcp:local .
 claude mcp add --scope user db-mcp -- docker run -i --rm \
   -v db-mcp-data:/data -e SPRING_PROFILES_ACTIVE= \
   -e DB_MCP_MASTER_PASSWORD='choose-a-strong-passphrase' \
@@ -212,6 +220,27 @@ Details: the image runs as uid `10001` with `DB_MCP_HOME=/data`; `compose.yaml` 
 restarts, recreation and image upgrades. For a bind mount, `chown 10001` the directory. Databases on the
 Docker host are reachable as `host.docker.internal`. Enable writes with `DB_MCP_ALLOW_WRITES=true` in the
 environment. Use the **same** master password for every way you start the server, they share one vault.
+The container runs with a read-only root filesystem and `no-new-privileges`; only `/data` and `/tmp` are
+writable.
+
+#### What is in the image
+
+~110 MB on disk, ~80 MB to pull. Two things keep it that small:
+
+* **A jlink'd runtime instead of a full JRE.** Stage 2 of the `Dockerfile` builds a ~60 MB Java runtime
+  containing only the modules this application uses, on top of `alpine` rather than a Debian base.
+  The module list is `jdeps` output plus what is reached reflectively — SASL (PostgreSQL's
+  SCRAM-SHA-256 handshake), JGSS, JDBC rowset/XA, the EC and PKCS#11 providers, JMX, zipfs. If you add a
+  dependency that needs more, `jlink --add-modules` in the `Dockerfile` is the place to declare it.
+* **Spring Boot layers instead of one fat jar.** The jar is split with
+  `java -Djarmode=tools ... extract --layers --launcher` and copied in four `COPY` steps, least volatile
+  first: `dependencies` (43 MB) → `spring-boot-loader` (0.7 MB) → `snapshot-dependencies` → `application`
+  (0.4 MB). A code change rebuilds and re-pushes only that last 0.4 MB layer; upgrading a dependency
+  invalidates the first one. The build stage is pinned to `$BUILDPLATFORM`, so a multi-arch build compiles
+  the (architecture independent) jar once instead of once per platform under emulation.
+
+`.github/workflows/docker-publish.yml` pushes `ghcr.io/thescarletarrow/db-mcp` for `linux/amd64` and
+`linux/arm64` on every push to `main` and on `v*` tags.
 
 ## Configuration
 
@@ -226,6 +255,7 @@ environment. Use the **same** master password for every way you start the server
 | `db-mcp.pool.max-size` / `connection-timeout` / `idle-timeout` | `4` / `10s` / `5m` | Per-database HikariCP settings. |
 | `DB_MCP_PORT`, `DB_MCP_BIND` (http profile) | `8080`, `127.0.0.1` | HTTP transport binding. |
 | `SPRING_PROFILES_ACTIVE=http` | *(unset = stdio)* | Selects the HTTP transport. |
+| `JAVA_OPTS` (Docker) | `-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError` | JVM flags. Setting it replaces these defaults. |
 
 Properties can be passed as `--db-mcp.query.timeout=60s` on the command line or as environment variables
 in Spring's relaxed form (`DB_MCP_QUERY_TIMEOUT=60s`).
@@ -266,8 +296,9 @@ in Spring's relaxed form (`DB_MCP_QUERY_TIMEOUT=60s`).
 
 ## Upgrading
 
-Rebuild the jar (or `docker compose up -d --build`); the vault format is versioned and older vaults load
-unchanged (databases registered before the read-only flag existed are treated as read-only).
+Rebuild the jar (or `docker compose up -d --build`, or `docker compose pull && docker compose up -d` when
+running the published image); the vault format is versioned and older vaults load unchanged (databases
+registered before the read-only flag existed are treated as read-only).
 
 ## Project layout
 
@@ -296,8 +327,10 @@ claude mcp list
 
 `--scope user` = во всех проектах. Без него сервер виден только в текущей папке.
 
-**Docker вместо jar**: `docker compose up -d --build`, затем
+**Docker вместо jar**: `cp .env.example .env` (вписать туда мастер-пароль), затем `docker compose up -d` и
 `claude mcp add --scope user --transport http db-mcp http://127.0.0.1:8080/mcp`.
+Собирать ничего не нужно, если раскомментировать в `.env` строки `DB_MCP_IMAGE` / `DB_MCP_PULL_POLICY` —
+тогда образ (~80 МБ) скачается с ghcr.io.
 Базы на своей машине указывать как `host.docker.internal`. Данные живут в volume `db-mcp-data`,
 `docker compose down -v` их удалит.
 
