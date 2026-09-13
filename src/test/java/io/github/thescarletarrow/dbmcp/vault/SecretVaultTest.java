@@ -27,15 +27,17 @@ class SecretVaultTest {
     @Test
     void savesEncryptedAndLoadsBack(@TempDir Path dir) throws Exception {
         SecretVault vault = new SecretVault(TestProperties.defaults(dir), mapper);
+        // '!' is outside the Base64 alphabet, so the username can never appear in the ciphertext by chance
+        String username = "vault-user_Q7!";
         VaultData data = new VaultData(
-                List.of(new Credential("dev", "app", "p@ss")),
+                List.of(new Credential("dev", username, "p@ss")),
                 List.of(new DatabaseDefinition("orders", DatabaseType.POSTGRESQL, "jdbc:postgresql://h/orders", "dev", "dev db"),
                         new DatabaseDefinition("erp", DatabaseType.ORACLE, "jdbc:oracle:thin:@//h:1521/ERP", "dev", null)));
 
         vault.save(data);
 
         String onDisk = Files.readString(vault.location());
-        assertThat(onDisk).doesNotContain("p@ss").doesNotContain("app").doesNotContain("jdbc:");
+        assertThat(onDisk).doesNotContain("p@ss").doesNotContain(username).doesNotContain("jdbc:");
         assertThat(new SecretVault(TestProperties.defaults(dir), mapper).load()).isEqualTo(data);
         assertThat(dir.resolve("vault.enc.tmp")).doesNotExist();
     }
