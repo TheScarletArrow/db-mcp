@@ -18,6 +18,11 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -102,5 +107,48 @@ class PostgresContainerIT {
                 .rows().getFirst().getFirst()).isEqualTo("on");
         assertThat(executor.query("pg-ro", "SELECT to_regclass('guard_probe') AS created", null)
                 .rows().getFirst().getFirst()).isNull();
+    }
+
+    /**
+     * Regression for a run_query injection: statements smuggled behind PostgreSQL dollar quoting used to slip
+     * past SqlGuard and, after a COMMIT ended the read-only transaction, actually write. The guard must reject
+     * them and the data must be untouched.
+     */
+    @Test
+    void runQueryRejectsDollarQuoteInjectionAndLeavesDataIntact() throws Exception {
+        connectionTools.registerDatabase(null, "pg-guard", postgres.getJdbcUrl(), null, "pg-dev",
+                postgres.getUsername(), postgres.getPassword(), "guard", null);
+        exec("DROP TABLE IF EXISTS victim", "CREATE TABLE victim (id int)", "INSERT INTO victim VALUES (1), (2), (3)");
+
+        List<String> injections = List.of(
+                "SELECT $$'$$; DROP TABLE victim",
+                "SELECT $$'$$; COMMIT; INSERT INTO victim VALUES (42)",
+                "SELECT $$'$$; COMMIT; DROP TABLE victim");
+        for (String sql : injections) {
+            assertThatThrownBy(() -> executor.query("pg-guard", sql, null))
+                    .as("run_query must reject %s", sql)
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        // a genuine dollar-quoted read is still allowed
+        assertThat(executor.query("pg-guard", "SELECT $$it's fine$$ AS note", null).rows().getFirst().getFirst())
+                .isEqualTo("it's fine");
+
+        try (Connection c = DriverManager.getConnection(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
+             Statement s = c.createStatement();
+             ResultSet rs = s.executeQuery("SELECT count(*), coalesce(max(id), 0) FROM victim")) {
+            rs.next();
+            assertThat(rs.getInt(1)).as("no row inserted, table not dropped").isEqualTo(3);
+            assertThat(rs.getInt(2)).as("id 42 never written").isEqualTo(3);
+        }
+    }
+
+    private static void exec(String... statements) throws Exception {
+        try (Connection c = DriverManager.getConnection(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
+             Statement s = c.createStatement()) {
+            for (String sql : statements) {
+                s.execute(sql);
+            }
+        }
     }
 }
