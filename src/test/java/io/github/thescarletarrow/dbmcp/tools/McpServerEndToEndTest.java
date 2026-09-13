@@ -89,9 +89,11 @@ class McpServerEndToEndTest {
 
     @Test
     void registersDatabasesSharingCredentialsAndPersistsThem() throws Exception {
+        // '-' and '!' are outside the Base64 alphabet, so the password cannot show up in the ciphertext by chance
+        String password = "e2e-vault-secret-Xq7!Lm2";
         McpSchema.CallToolResult first = client.callTool(new McpSchema.CallToolRequest("register_database", Map.of(
                 "name", "orders-dev", "url", "jdbc:postgresql://127.0.0.1:1/orders",
-                "credentialAlias", "dev", "username", "app", "password", "pw")));
+                "credentialAlias", "dev", "username", "app", "password", password)));
         assertThat(first.isError()).isFalse();
         Map<?, ?> firstBody = json.readValue(text(first), Map.class);
         assertThat(firstBody.get("credentialsSource")).asString().contains("stored new credentials under alias 'dev'");
@@ -103,9 +105,9 @@ class McpServerEndToEndTest {
         assertThat(json.readValue(text(second), Map.class).get("credentialsSource")).asString().contains("reused");
 
         McpSchema.CallToolResult credentials = client.callTool(new McpSchema.CallToolRequest("list_credentials", Map.of()));
-        assertThat(text(credentials)).contains("\"alias\":\"dev\"").contains("erp-dev").contains("orders-dev").doesNotContain("pw");
+        assertThat(text(credentials)).contains("\"alias\":\"dev\"").contains("erp-dev").contains("orders-dev").doesNotContain(password);
 
-        assertThat(Files.readString(vaultDir.resolve("vault.enc"))).doesNotContain("pw").doesNotContain("jdbc:");
+        assertThat(Files.readString(vaultDir.resolve("vault.enc"))).doesNotContain(password).doesNotContain("jdbc:");
     }
 
     @Test
