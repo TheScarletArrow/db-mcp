@@ -1,5 +1,7 @@
 # db-mcp
 
+[![Publish Docker image](https://github.com/TheScarletArrow/db-mcp/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/TheScarletArrow/db-mcp/actions/workflows/docker-publish.yml)
+
 MCP (Model Context Protocol) server that gives an AI assistant access to **several PostgreSQL and Oracle
 databases at the same time**. Built with Spring Boot 4 / Spring AI 2 on Java 21.
 
@@ -66,18 +68,27 @@ URL formats:
 * Oracle: `jdbc:oracle:thin:@//host:1521/service_name` or `jdbc:oracle:thin:@host:1521:SID`
 * From Docker, a database on your machine is `host.docker.internal`, not `localhost`.
 
-Names and aliases: 1-64 chars of `a-z 0-9 . _ -`, case-insensitive.
+Names and aliases: 1-64 chars of `a-z 0-9 . _ -`, starting with a letter or a digit, case-insensitive
+(`Orders-DEV` and `orders-dev` are the same database). `register_database` called without a
+`credentialAlias` stores the credentials under the database name, so the next database can reuse them by
+that name.
 
 ## Working with data
 
-* "Show tables in schema billing of orders-dev" → `list_tables`; "describe orders" → `describe_table`
-  (columns, PK, FKs, indexes). Identifiers are case-normalized per engine; double-quote for exact match.
-* "How many orders per status this month?" → `run_query`. One SELECT/WITH/EXPLAIN per call, executed in a
-  read-only transaction that is rolled back, 200 rows by default (`maxRows` up to 5000), long cells
-  clipped. Anything else (INSERT, DDL, `FOR UPDATE`, `SELECT ... INTO`, second statement after `;`) is
-  rejected before it reaches the database - see [Read-only enforcement](#read-only-enforcement).
-* Writes: `execute_statement` runs one DML/DDL statement and commits, only when **both** hold:
-  server started with `DB_MCP_ALLOW_WRITES=true` **and** the database has `readOnly=false`.
+* "Which schemas are in orders-dev?" → `list_schemas`. System schemas (`pg_catalog`, `information_schema`,
+  `SYS`, `APEX_*`, ...) are hidden unless explicitly asked for.
+* "Show tables in schema billing of orders-dev" → `list_tables` (LIKE pattern such as `ord%`, views included
+  by default, 200 tables per call and up to 2000 on request; `truncated` tells you to narrow the pattern);
+  "describe orders" → `describe_table` (columns with type/nullability/default, PK, FKs, indexes).
+  Identifiers are case-normalized per engine; double-quote for exact match.
+* "How many orders per status this month?" → `run_query`. One read statement
+  (`SELECT`/`WITH`/`EXPLAIN`/`SHOW`/`VALUES`/`TABLE`) per call, executed in a read-only transaction that is
+  rolled back, 200 rows by default (`maxRows` up to 5000), long cells clipped. The result carries
+  `columns`, `columnTypes`, `rows`, `rowCount`, `truncated` and `executionMillis`. Anything else (INSERT,
+  DDL, `FOR UPDATE`, `SELECT ... INTO`, second statement after `;`) is rejected before it reaches the
+  database - see [Read-only enforcement](#read-only-enforcement).
+* Writes: `execute_statement` runs one DML/DDL statement, commits and returns `affectedRows`, only when
+  **both** hold: server started with `DB_MCP_ALLOW_WRITES=true` **and** the database has `readOnly=false`.
 
 ## Read-only enforcement
 
@@ -86,8 +97,8 @@ through any tool and any wording of the statement. Three independent fences, bec
 on every engine:
 
 1. **The statement guard** (`SqlGuard`) - the only fence that works on all of them. `run_query` accepts a
-   single `SELECT`/`WITH`/`EXPLAIN`/`SHOW`/`VALUES` and rejects everything else *before* the database sees
-   it:
+   single statement starting with `SELECT`, `WITH`, `EXPLAIN`, `SHOW`, `VALUES`, `TABLE` or
+   `DESCRIBE`/`DESC`, and rejects everything else *before* the database sees it:
    * DML/DDL and transaction control, including data-modifying CTEs (`WITH x AS (DELETE ... RETURNING ...)`)
      and locking reads (`FOR UPDATE`);
    * `SELECT ... INTO` and `INTO OUTFILE`, which create or fill a table while looking like a query;
@@ -112,24 +123,35 @@ on every engine:
 
 The guard is deliberately blunt: a column literally named `update`, `load` or `into` has to be quoted
 (`SELECT "into" FROM audit`), and read-only Oracle package functions such as `DBMS_LOB.getlength` are
-refused together with the writing ones. Rejections carry a message that says what to do instead.
+refused together with the writing ones. The single keyword judged in context is `ANALYZE`: allowed after
+`EXPLAIN`, because there it runs the plan of a read, refused on its own, where it rewrites statistics.
+Rejections carry a message that says what to do instead.
 
 None of this replaces a SELECT-only database user for anything that matters (see
 [Persistence, backup, security](#persistence-backup-security)).
 
 ## Tools
 
-| Tool | Purpose |
-|------|---------|
-| `list_databases` | Registered databases, engine, URL, credential alias, read-only flag (never passwords). |
-| `register_database` | Add/update a database. Credentials: reuse `credentialAlias`, pass `username`/`password`, or let the server elicit them. `readOnly` (default `true`); omitted on re-registration keeps the stored value. Tests the connection. |
-| `set_read_only` | Flip a database between read-only and writable without re-registering it. |
-| `remove_database` | Unregister a database and close its pool. |
-| `test_connection` | Product/version, user and current schema of a database. |
-| `save_credentials` / `list_credentials` / `remove_credentials` | Manage reusable login/password sets. |
-| `list_schemas`, `list_tables`, `describe_table` | Catalog exploration through JDBC metadata (works for both engines). |
-| `run_query` | One read-only `SELECT`/`WITH`/`EXPLAIN` statement, capped rows, clipped long cells. |
-| `execute_statement` | One DML/DDL statement, only when `DB_MCP_ALLOW_WRITES=true` **and** the database is not read-only. |
+Optional parameters are marked `?`.
+
+| Tool | Parameters | Purpose |
+|------|------------|---------|
+| `list_databases` | - | Registered databases, engine, URL, credential alias, username, read-only flag (never passwords). |
+| `register_database` | `name`, `url`, `type?`, `credentialAlias?`, `username?`, `password?`, `description?`, `readOnly?` | Add/update a database. Credentials: reuse `credentialAlias`, pass `username`/`password`, or let the server elicit them. `type` is inferred from the URL when omitted. `readOnly` defaults to `true`; omitted on re-registration it keeps the stored value. Tests the connection and returns the result. |
+| `set_read_only` | `name`, `readOnly` | Flip a database between read-only and writable without re-registering it. |
+| `remove_database` | `name` | Unregister a database and close its pool. Stored credentials are kept. |
+| `test_connection` | `name` | Product/version, authenticated user and current schema of a database. |
+| `save_credentials` | `alias`, `username`, `password` | Store or update a login/password set; every database using the alias reconnects. |
+| `list_credentials` | - | Alias, username and the databases using each set (never passwords). |
+| `remove_credentials` | `alias` | Delete a set; refused while a registered database still uses it. |
+| `list_schemas` | `database`, `includeSystem?` | Schemas of a database; system schemas hidden by default. |
+| `list_tables` | `database`, `schema?`, `namePattern?`, `includeViews?`, `limit?` | Tables and views of a schema (current schema when omitted), LIKE pattern, 200 per call and 2000 max. |
+| `describe_table` | `database`, `table`, `schema?` | Columns with type/nullability/default, primary key, foreign keys and indexes. |
+| `run_query` | `database`, `sql`, `maxRows?` | One read-only statement in a rolled-back read-only transaction, capped rows, clipped long cells. |
+| `execute_statement` | `database`, `sql` | One DML/DDL statement, only when `DB_MCP_ALLOW_WRITES=true` **and** the database is not read-only. |
+
+Every tool carries MCP tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
+`openWorldHint`), so a client that surfaces them can tell a catalog lookup from a write before calling.
 
 ## Build & run
 
@@ -174,11 +196,6 @@ there; use the HTTP variant). A `local` entry shadows a `user` entry with the sa
   }
 }
 ```
-
-
-For Claude Code: `claude mcp add db-mcp -e DB_MCP_MASTER_PASSWORD=... -- java -jar /path/to/db-mcp-0.1.0-SNAPSHOT.jar`. <br>
-OR `claude mcp add --scope user --transport http db-mcp http://127.0.0.1:8999/mcp`
-
 
 ### Docker
 
@@ -247,7 +264,8 @@ writable.
 | Environment variable / property | Default | Meaning |
 |---------------------------------|---------|---------|
 | `DB_MCP_HOME` / `db-mcp.vault.directory` | `~/.db-mcp` (Docker: `/data`) | Where `vault.enc` (and `vault.key`) live. |
-| `DB_MCP_MASTER_PASSWORD` / `db-mcp.vault.master-password` | *(empty)* | If set, the vault key is derived with PBKDF2-HMAC-SHA256 (600k iterations, random salt). If empty, a random 256-bit key is generated once into `vault.key` (mode `0600`). Recommended: set it. |
+| `DB_MCP_MASTER_PASSWORD` / `db-mcp.vault.master-password` | *(empty)* | If set, the vault key is derived with PBKDF2-HMAC-SHA256 (random salt per write, iteration count in the next row). If empty, a random 256-bit key is generated once into `vault.key` (mode `0600`). Recommended: set it. |
+| `db-mcp.vault.pbkdf2-iterations` | `600000` | PBKDF2 iterations used when a master password is set (minimum 100000). Raising it re-encrypts the vault on the next write; the value used is stored in the file, so older vaults keep loading. |
 | `DB_MCP_ALLOW_WRITES` / `db-mcp.query.allow-writes` | `false` | Server-wide switch for `execute_statement`. |
 | `db-mcp.query.default-max-rows` / `hard-max-rows` | `200` / `5000` | Row limits for `run_query`. |
 | `db-mcp.query.timeout` | `30s` | Statement timeout. |
@@ -284,9 +302,12 @@ in Spring's relaxed form (`DB_MCP_QUERY_TIMEOUT=60s`).
 | `Cannot connect to database 'x': Connection refused` / `UnknownHostException` | Wrong host/port, or `localhost` used from inside Docker (use `host.docker.internal`). |
 | `FATAL: password authentication failed` / `ORA-01017` | Wrong credentials: "update the password for alias dev". |
 | `No credentials for database 'x'. Ask the user ...` | The assistant called `register_database` without credentials and the client has no elicitation. Tell it the login/password or which alias to reuse. |
+| `Unknown database 'x'. Registered databases: [...]` | Typo in the name, or the database was never registered in this vault. Names are lower-cased: `Orders-DEV` is `orders-dev`. |
+| `Credential 'dev' is still used by: [orders-dev, ...]` | `remove_credentials` refuses while databases authenticate with the alias. Remove them, or point them at another alias first. |
+| `Database 'x' references missing credential 'dev'` | The vault has the database but not its credentials (e.g. a partially restored backup). `save_credentials` under that alias restores it. |
 | `Write statements are disabled ...` | Start the server with `DB_MCP_ALLOW_WRITES=true`. |
 | `Database 'x' is registered as read-only ...` | "Allow writes on x" (`set_read_only`). |
-| `Only read-only statements ... are allowed in run_query` | The statement is not a SELECT/WITH/EXPLAIN, or contains a second statement. Use `execute_statement` for writes. |
+| `Only read-only statements (SELECT/WITH/EXPLAIN/SHOW) are allowed in run_query` | The statement does not start with one of the accepted read keywords, or it contains a second statement. Use `execute_statement` for writes. |
 | `'INTO' is not allowed in run_query ...` | `SELECT ... INTO` writes a table. Drop the INTO clause, or use `execute_statement` on a writable database. |
 | `Statement uses 'NEXTVAL' ...` (or `CSVWRITE`, `DBLINK`, `DBMS_...`) | A routine that writes or reaches outside the database; not allowed in `run_query` even inside a SELECT. |
 | `Statement contains 'LOAD', which is not allowed ...` | A column or alias collides with a keyword: double-quote it (`SELECT "load" FROM t`). |
@@ -312,6 +333,10 @@ sql/         SqlGuard, SqlMasker,      read-only guard (keyword + routine policy
 metadata/    SchemaInspector           schemas / tables / columns / keys / indexes via DatabaseMetaData
 tools/       *Tools                    @McpTool endpoints exposed to the assistant
 ```
+
+Tests: H2-backed unit tests plus an in-process end-to-end test that drives the real MCP server over the
+streamable-HTTP transport (`McpServerEndToEndTest`); `PostgresContainerIT` re-checks the read-only fences
+against a real PostgreSQL under `./mvnw verify` and skips itself when Docker is unavailable.
 
 ## Шпаргалка (RU)
 
@@ -341,6 +366,10 @@ claude mcp list
 * «Какие базы подключены?» / «Какие креды сохранены?» / «Проверь подключение к erp-dev».
 * «Пароль для алиаса orders-dev поменялся» → обновит и переподключит все базы с этим алиасом.
 * «Удали erp-dev».
+
+**Запросы**: «Какие схемы в orders-dev?», «Покажи таблицы в схеме billing», «Опиши таблицу orders»,
+«Сколько заказов по статусам за месяц?». Один читающий запрос за вызов, 200 строк по умолчанию (до 5000
+через `maxRows`), длинные ячейки обрезаются.
 
 **Только чтение**: все базы read-only по умолчанию. В такую базу нельзя ничего записать вообще:
 отклоняются INSERT/UPDATE/DELETE/DDL, `SELECT ... INTO`, функции-запись внутри SELECT (`nextval`,
