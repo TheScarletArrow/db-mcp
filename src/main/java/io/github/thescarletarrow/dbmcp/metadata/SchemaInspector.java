@@ -75,20 +75,26 @@ public class SchemaInspector {
 
     public TableList listTables(String databaseName, String schema, String namePattern, boolean includeViews, int limit)
             throws SQLException {
-        String[] types = includeViews ? new String[]{"TABLE", "VIEW", "MATERIALIZED VIEW"} : new String[]{"TABLE"};
+        DatabaseType type = dataSources.definition(databaseName).type();
+        String[] types = type == DatabaseType.CLICKHOUSE ? null
+                : includeViews ? new String[]{"TABLE", "VIEW", "MATERIALIZED VIEW"} : new String[]{"TABLE"};
         List<TableInfo> tables = new ArrayList<>();
         boolean truncated = false;
         try (Connection c = dataSources.dataSource(databaseName).getConnection()) {
             DatabaseMetaData md = c.getMetaData();
-            String effectiveSchema = resolveSchema(md, dataSources.definition(databaseName).type(), schema);
+            String effectiveSchema = resolveSchema(md, type, schema);
             try (ResultSet rs = md.getTables(null, effectiveSchema, blankToWildcard(namePattern), types)) {
                 while (rs.next()) {
+                    String tableType = rs.getString("TABLE_TYPE");
+                    if (type == DatabaseType.CLICKHOUSE && !includeClickHouseTableType(tableType, includeViews)) {
+                        continue;
+                    }
                     if (tables.size() >= limit) {
                         truncated = true;
                         break;
                     }
                     tables.add(new TableInfo(rs.getString("TABLE_SCHEM"), rs.getString("TABLE_NAME"),
-                            rs.getString("TABLE_TYPE"), rs.getString("REMARKS")));
+                            tableType, rs.getString("REMARKS")));
                 }
             }
         }
@@ -210,6 +216,14 @@ public class SchemaInspector {
             return identifier.toLowerCase(Locale.ROOT);
         }
         return identifier;
+    }
+
+    private static boolean includeClickHouseTableType(String tableType, boolean includeViews) {
+        if (tableType == null) {
+            return false;
+        }
+        String normalized = tableType.toUpperCase(Locale.ROOT);
+        return normalized.endsWith("TABLE") || includeViews && normalized.contains("VIEW");
     }
 
     private static String blankToWildcard(String pattern) {

@@ -63,6 +63,13 @@ public enum DatabaseType {
         return configurePoolReadOnly;
     }
 
+    public String connectionUrl(String jdbcUrl) {
+        if (this != CLICKHOUSE || hasParameter(jdbcUrl, "compress")) {
+            return jdbcUrl;
+        }
+        return appendParameter(jdbcUrl, "compress=false");
+    }
+
     public boolean matchesUrl(String jdbcUrl) {
         if (jdbcUrl == null) {
             return false;
@@ -86,5 +93,26 @@ public enum DatabaseType {
             case "CH", "CLICKHOUSE" -> Optional.of(CLICKHOUSE);
             default -> Optional.empty();
         };
+    }
+
+    private static boolean hasParameter(String jdbcUrl, String name) {
+        int queryStart = jdbcUrl.indexOf('?');
+        if (queryStart < 0) {
+            return false;
+        }
+        int fragmentStart = jdbcUrl.indexOf('#', queryStart + 1);
+        String query = jdbcUrl.substring(queryStart + 1, fragmentStart < 0 ? jdbcUrl.length() : fragmentStart);
+        String prefix = name.toLowerCase(Locale.ROOT) + "=";
+        return Arrays.stream(query.split("&"))
+                .map(p -> p.toLowerCase(Locale.ROOT))
+                .anyMatch(p -> p.equals(name.toLowerCase(Locale.ROOT)) || p.startsWith(prefix));
+    }
+
+    private static String appendParameter(String jdbcUrl, String parameter) {
+        int fragmentStart = jdbcUrl.indexOf('#');
+        String main = fragmentStart < 0 ? jdbcUrl : jdbcUrl.substring(0, fragmentStart);
+        String fragment = fragmentStart < 0 ? "" : jdbcUrl.substring(fragmentStart);
+        String separator = main.contains("?") ? "&" : "?";
+        return main + separator + parameter + fragment;
     }
 }

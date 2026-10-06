@@ -127,4 +127,16 @@ class DatabaseRegistryTest {
         assertThat(Class.forName(DatabaseType.CLICKHOUSE.driverClassName()).getName())
                 .isEqualTo("com.clickhouse.jdbc.ClickHouseDriver");
     }
+
+    @Test
+    void clickHouseConnectionUrlDisablesCompressionByDefault() {
+        assertThat(DatabaseType.CLICKHOUSE.connectionUrl("jdbc:ch://h:8123/db"))
+                .isEqualTo("jdbc:ch://h:8123/db?compress=false");
+        assertThat(DatabaseType.CLICKHOUSE.connectionUrl("jdbc:clickhouse:http://h:8123/db?ssl=false#tag"))
+                .isEqualTo("jdbc:clickhouse:http://h:8123/db?ssl=false&compress=false#tag");
+        assertThat(DatabaseType.CLICKHOUSE.connectionUrl("jdbc:ch://h:8123/db?compress=true"))
+                .isEqualTo("jdbc:ch://h:8123/db?compress=true");
+        assertThat(DatabaseType.POSTGRESQL.connectionUrl("jdbc:postgresql://h/db"))
+                .isEqualTo("jdbc:postgresql://h/db");
+    }
 }

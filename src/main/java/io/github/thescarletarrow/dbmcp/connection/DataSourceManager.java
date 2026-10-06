@@ -60,7 +60,7 @@ public class DataSourceManager implements DataSourceProvider {
         HikariConfig config = new HikariConfig();
         config.setPoolName("db-mcp-" + definition.name());
         config.setDriverClassName(definition.type().driverClassName());
-        config.setJdbcUrl(definition.url());
+        config.setJdbcUrl(definition.type().connectionUrl(definition.url()));
         config.setUsername(credential.username());
         config.setPassword(credential.password());
         config.setConnectionTestQuery(definition.type().validationQuery());

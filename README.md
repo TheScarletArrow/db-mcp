@@ -68,6 +68,7 @@ URL formats:
 * PostgreSQL: `jdbc:postgresql://host:5432/dbname` (`?sslmode=require` etc. as usual)
 * Oracle: `jdbc:oracle:thin:@//host:1521/service_name` or `jdbc:oracle:thin:@host:1521:SID`
 * ClickHouse: `jdbc:ch://host:8123/database` or `jdbc:clickhouse:http://host:8123/database`
+  (`compress=false` is added automatically for driver compatibility unless the URL already sets `compress`)
 * From Docker, a database on your machine is `host.docker.internal`, not `localhost`.
 
 Names and aliases: 1-64 chars of `a-z 0-9 . _ -`, starting with a letter or a digit, case-insensitive
