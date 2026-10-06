@@ -7,10 +7,10 @@ import java.util.Arrays;
  * in {@link SqlGuard} cannot be fooled by text such as {@code 'drop me'} or {@code -- delete}. Every character
  * keeps its position, so an offset into the masked text addresses the same character in the original SQL.
  *
- * <p>Anything that cannot be lexed the same way both supported engines would lex it - an unterminated literal
+ * <p>Anything that cannot be lexed consistently across supported engines - an unterminated literal
  * or comment, a backslash in front of a closing quote (whose meaning depends on the server's
  * {@code standard_conforming_strings} / {@code sql_mode}) - is rejected rather than guessed. Where the two
- * engines differ the masker deliberately masks the smaller region: seeing more SQL than the server will run
+ * engines differ, the masker deliberately masks the smaller region: seeing more SQL than the server will run
  * can only make the guard stricter, while seeing less would make it blind.
  */
 final class SqlMasker {

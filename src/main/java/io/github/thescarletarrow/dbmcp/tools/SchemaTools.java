@@ -24,8 +24,8 @@ public class SchemaTools {
     }
 
     @McpTool(name = "list_schemas",
-            description = "List schemas of a registered database. System schemas (pg_catalog, SYS, ...) are hidden unless "
-                    + "include_system is true.",
+            description = "List schemas/databases of a registered database. System schemas (pg_catalog, SYS, system, ...) "
+                    + "are hidden unless include_system is true.",
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = true))
     public List<SchemaInspector.SchemaInfo> listSchemas(
             @McpToolParam(description = "Registered database name") String database,

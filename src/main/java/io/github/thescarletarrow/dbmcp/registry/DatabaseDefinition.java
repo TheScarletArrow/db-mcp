@@ -24,7 +24,7 @@ public record DatabaseDefinition(String name, DatabaseType type, String url, Str
             throw new IllegalArgumentException("JDBC url must not be blank");
         }
         if (!type.matchesUrl(url)) {
-            throw new IllegalArgumentException("JDBC url must start with '" + type.urlPrefix() + "' for " + type);
+            throw new IllegalArgumentException("JDBC url must start with '" + type.urlPrefixesDescription() + "' for " + type);
         }
         credentialAlias = Names.normalize(credentialAlias, "credential alias");
         description = description == null ? "" : description.strip();

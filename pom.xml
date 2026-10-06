@@ -15,7 +15,7 @@
   <artifactId>db-mcp</artifactId>
   <version>0.1.0-SNAPSHOT</version>
   <name>db-mcp</name>
-  <description>MCP server for working with multiple PostgreSQL and Oracle databases with an encrypted credential vault</description>
+  <description>MCP server for working with multiple PostgreSQL, Oracle and ClickHouse databases with an encrypted credential vault</description>
 
   <properties>
     <java.version>21</java.version>
@@ -70,6 +70,13 @@
     <dependency>
       <groupId>com.oracle.database.jdbc</groupId>
       <artifactId>ojdbc11</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.clickhouse</groupId>
+      <artifactId>clickhouse-jdbc</artifactId>
+      <version>0.9.8</version>
+      <classifier>all</classifier>
       <scope>runtime</scope>
     </dependency>
 

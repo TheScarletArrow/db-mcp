@@ -106,16 +106,25 @@ class DatabaseRegistryTest {
         assertThatThrownBy(() -> new DatabaseDefinition("x", DatabaseType.ORACLE, "jdbc:postgresql://a/x", "dev", ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("jdbc:oracle:");
+        assertThatThrownBy(() -> new DatabaseDefinition("x", DatabaseType.CLICKHOUSE, "jdbc:postgresql://a/x", "dev", ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("jdbc:ch:").hasMessageContaining("jdbc:clickhouse:");
         assertThatThrownBy(() -> new Credential("bad alias!", "u", "p")).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
-    void typeParsingAndInference() {
+    void typeParsingAndInference() throws Exception {
         assertThat(DatabaseType.parse("pg")).contains(DatabaseType.POSTGRESQL);
         assertThat(DatabaseType.parse("Oracle")).contains(DatabaseType.ORACLE);
+        assertThat(DatabaseType.parse("ch")).contains(DatabaseType.CLICKHOUSE);
+        assertThat(DatabaseType.parse("ClickHouse")).contains(DatabaseType.CLICKHOUSE);
         assertThat(DatabaseType.parse("mysql")).isEmpty();
         assertThat(DatabaseType.fromUrl("jdbc:oracle:thin:@//h:1521/S")).contains(DatabaseType.ORACLE);
         assertThat(DatabaseType.fromUrl("jdbc:postgresql://h/d")).contains(DatabaseType.POSTGRESQL);
+        assertThat(DatabaseType.fromUrl("jdbc:ch://h:8123/d")).contains(DatabaseType.CLICKHOUSE);
+        assertThat(DatabaseType.fromUrl("jdbc:clickhouse:http://h:8123/d")).contains(DatabaseType.CLICKHOUSE);
         assertThat(DatabaseType.fromUrl("jdbc:mysql://h/d")).isEmpty();
+        assertThat(Class.forName(DatabaseType.CLICKHOUSE.driverClassName()).getName())
+                .isEqualTo("com.clickhouse.jdbc.ClickHouseDriver");
     }
 }

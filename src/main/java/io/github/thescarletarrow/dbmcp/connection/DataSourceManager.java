@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Lazily creates one small HikariCP pool per registered database and keeps it for reuse,
- * so that several PostgreSQL and Oracle databases can be used side by side.
+ * so that several PostgreSQL, Oracle and ClickHouse databases can be used side by side.
  */
 @Component
 public class DataSourceManager implements DataSourceProvider {
@@ -71,8 +71,10 @@ public class DataSourceManager implements DataSourceProvider {
         // Connect once while creating the pool so that a wrong URL/credential surfaces immediately with the
         // driver's own message instead of a generic "connection is not available" timeout later.
         config.setInitializationFailTimeout(1);
-        config.setAutoCommit(false);
-        config.setReadOnly(true);
+        config.setAutoCommit(!definition.type().transactional());
+        if (definition.type().configurePoolReadOnly()) {
+            config.setReadOnly(true);
+        }
         // With autoCommit off the alive-test query would leave a transaction open on the lent connection;
         // PostgreSQL then refuses setReadOnly(). Roll the internal query back so the connection is handed out idle.
         config.setIsolateInternalQueries(true);

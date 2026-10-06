@@ -32,7 +32,8 @@ class SecretVaultTest {
         VaultData data = new VaultData(
                 List.of(new Credential("dev", username, "p@ss")),
                 List.of(new DatabaseDefinition("orders", DatabaseType.POSTGRESQL, "jdbc:postgresql://h/orders", "dev", "dev db"),
-                        new DatabaseDefinition("erp", DatabaseType.ORACLE, "jdbc:oracle:thin:@//h:1521/ERP", "dev", null)));
+                        new DatabaseDefinition("erp", DatabaseType.ORACLE, "jdbc:oracle:thin:@//h:1521/ERP", "dev", null),
+                        new DatabaseDefinition("analytics", DatabaseType.CLICKHOUSE, "jdbc:ch://h:8123/default", "dev", null)));
 
         vault.save(data);
 

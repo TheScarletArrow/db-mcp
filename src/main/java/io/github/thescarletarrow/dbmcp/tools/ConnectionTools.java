@@ -54,7 +54,7 @@ public class ConnectionTools {
     }
 
     @McpTool(name = "list_databases",
-            description = "List all registered databases (PostgreSQL and Oracle) with their JDBC URL and the credential "
+            description = "List all registered databases (PostgreSQL, Oracle and ClickHouse) with their JDBC URL and the credential "
                     + "alias they use. Passwords are never returned. Call this first to see which database names can be "
                     + "used with the other tools.",
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = false))
@@ -103,7 +103,7 @@ public class ConnectionTools {
 
     @McpTool(name = "register_database",
             description = """
-                    Register a PostgreSQL or Oracle database (or update an existing one) and store it in the encrypted vault \
+                    Register a PostgreSQL, Oracle or ClickHouse database (or update an existing one) and store it in the encrypted vault \
                     so it can be used in later sessions. Credentials can be supplied in three ways, in this order of \
                     preference:
                     1. credential_alias of an already stored set (see list_credentials) when this database shares the \
@@ -119,8 +119,8 @@ public class ConnectionTools {
     public RegistrationResult registerDatabase(
             McpSyncRequestContext context,
             @McpToolParam(description = "Short name to refer to this database, e.g. 'orders-dev' (a-z, 0-9, '.', '_', '-')") String name,
-            @McpToolParam(description = "JDBC URL, e.g. jdbc:postgresql://host:5432/db or jdbc:oracle:thin:@//host:1521/service") String url,
-            @McpToolParam(required = false, description = "Engine: 'postgresql' or 'oracle'. Inferred from the URL when omitted") String type,
+            @McpToolParam(description = "JDBC URL, e.g. jdbc:postgresql://host:5432/db, jdbc:oracle:thin:@//host:1521/service or jdbc:ch://host:8123/db") String url,
+            @McpToolParam(required = false, description = "Engine: 'postgresql', 'oracle' or 'clickhouse'. Inferred from the URL when omitted") String type,
             @McpToolParam(required = false, description = "Alias of stored credentials to reuse, or the alias to store new credentials under") String credentialAlias,
             @McpToolParam(required = false, description = "Database login (only when not reusing an alias)") String username,
             @McpToolParam(required = false, description = "Database password (only when not reusing an alias)") String password,
@@ -223,10 +223,11 @@ public class ConnectionTools {
         Optional<DatabaseType> explicit = DatabaseType.parse(type);
         Optional<DatabaseType> fromUrl = DatabaseType.fromUrl(url);
         if (type != null && !type.isBlank() && explicit.isEmpty()) {
-            throw new IllegalArgumentException("Unsupported database type '" + type + "'. Supported: postgresql, oracle.");
+            throw new IllegalArgumentException("Unsupported database type '" + type + "'. Supported: postgresql, oracle, clickhouse.");
         }
         return explicit.or(() -> fromUrl).orElseThrow(() -> new IllegalArgumentException(
-                "Cannot infer database type from URL '" + url + "'. Expected a jdbc:postgresql: or jdbc:oracle: URL."));
+                "Cannot infer database type from URL '" + url
+                        + "'. Expected a jdbc:postgresql:, jdbc:oracle:, jdbc:ch: or jdbc:clickhouse: URL."));
     }
 
     private DatabaseView view(DatabaseDefinition d) {

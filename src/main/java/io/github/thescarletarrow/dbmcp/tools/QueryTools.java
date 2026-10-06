@@ -23,12 +23,13 @@ public class QueryTools {
 
     @McpTool(name = "run_query",
             description = "Run a single read-only SQL statement (SELECT / WITH / EXPLAIN) against a registered database "
-                    + "inside a read-only transaction that is rolled back afterwards. Rows are capped by max_rows "
+                    + "with read-only safeguards; transactional engines use a read-only transaction rolled back afterwards. Rows are capped by max_rows "
                     + "(default 200); 'truncated' is true when more rows exist - add WHERE/LIMIT/FETCH FIRST to narrow. "
-                    + "Long text cells are clipped. Use the engine's SQL dialect (PostgreSQL or Oracle) of the target "
+                    + "Long text cells are clipped. Use the engine's SQL dialect (PostgreSQL, Oracle or ClickHouse) of the target "
                     + "database. Anything that could write is rejected before the database sees it: DML/DDL, "
                     + "'SELECT ... INTO', locking clauses, a second statement after ';', and routines that write or "
-                    + "reach outside the database (nextval, lo_import, pg_read_file, dblink, CSVWRITE, DBMS_*/UTL_*).",
+                    + "reach outside the database (nextval, lo_import, pg_read_file, dblink, CSVWRITE, url, s3, "
+                    + "file, remote, DBMS_*/UTL_*).",
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, idempotentHint = true, openWorldHint = true))
     public QueryResult runQuery(
             @McpToolParam(description = "Registered database name") String database,

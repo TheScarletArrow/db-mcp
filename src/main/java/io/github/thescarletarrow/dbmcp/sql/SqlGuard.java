@@ -8,8 +8,8 @@ import java.util.regex.Pattern;
 
 /**
  * Static checks applied before SQL is sent to a database. This is defence in depth on top of read-only JDBC
- * connections and read-only transactions - both of which several drivers (Oracle, H2) silently ignore - so it
- * has to stand on its own: it rejects anything that is not plainly a single read.
+ * connections and read-only transactions where supported - both of which several drivers (Oracle, H2) silently
+ * ignore - so it has to stand on its own: it rejects anything that is not plainly a single read.
  *
  * <p>Rejected in {@code run_query}, on top of the obvious {@code INSERT}/{@code UPDATE}/{@code DELETE}/DDL:
  * <ul>
@@ -32,7 +32,8 @@ public final class SqlGuard {
             "GRANT", "REVOKE", "CALL", "EXEC", "EXECUTE", "DO", "BEGIN", "DECLARE",
             "LOCK", "COPY", "VACUUM", "ANALYZE", "CLUSTER", "REINDEX", "REFRESH", "CHECKPOINT",
             "SET", "RESET", "COMMIT", "ROLLBACK", "SAVEPOINT", "LISTEN", "NOTIFY", "PURGE", "FLASHBACK",
-            "PREPARE", "DEALLOCATE", "DISCARD", "LOAD", "IMPORT", "ATTACH", "DETACH");
+            "PREPARE", "DEALLOCATE", "DISCARD", "LOAD", "IMPORT", "ATTACH", "DETACH",
+            "OPTIMIZE", "SYSTEM", "KILL", "BACKUP", "RESTORE", "EXCHANGE", "MOVE", "FREEZE", "UNFREEZE");
 
     /**
      * Routines that modify data, touch the file system or reach outside the database even though the statement
@@ -56,7 +57,11 @@ public final class SqlGuard {
             // Oracle - outbound calls (the DBMS_/UTL_ packages are covered by the prefixes below)
             "HTTPURITYPE", "DBURITYPE",
             // H2 - file access straight from a SELECT
-            "FILE_READ", "FILE_WRITE", "CSVREAD", "CSVWRITE", "LINK_SCHEMA");
+            "FILE_READ", "FILE_WRITE", "CSVREAD", "CSVWRITE", "LINK_SCHEMA",
+            // ClickHouse - table functions that read local files, call out to networks or run external commands
+            "FILE", "URL", "S3", "S3CLUSTER", "GCS", "HDFS", "AZUREBLOBSTORAGE", "AZUREBLOBSTORAGECLUSTER",
+            "MYSQL", "POSTGRESQL", "JDBC", "ODBC", "MONGODB", "REDIS", "REMOTE", "REMOTESECURE", "CLUSTER",
+            "CLUSTERALLREPLICAS", "EXECUTABLE", "EXECUTABLEPOOL", "SLEEP");
 
     /** Oracle's built-in packages: the read-only ones are not worth the risk of allow-listing them one by one. */
     private static final List<String> UNSAFE_ROUTINE_PREFIXES = List.of("DBMS_", "UTL_", "OWA_");

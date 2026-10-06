@@ -16,12 +16,13 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Reads catalog information through {@link DatabaseMetaData}, which works uniformly for PostgreSQL and Oracle.
+ * Reads catalog information through {@link DatabaseMetaData}, which works uniformly for the supported engines.
  */
 @Service
 public class SchemaInspector {
 
     private static final Set<String> PG_SYSTEM_SCHEMAS = Set.of("pg_catalog", "information_schema", "pg_toast");
+    private static final Set<String> CLICKHOUSE_SYSTEM_SCHEMAS = Set.of("system", "INFORMATION_SCHEMA", "information_schema");
     private static final Set<String> ORACLE_SYSTEM_SCHEMAS = Set.of("SYS", "SYSTEM", "XDB", "CTXSYS", "MDSYS", "OLAPSYS",
             "ORDSYS", "ORDDATA", "OUTLN", "WMSYS", "DBSNMP", "APPQOSSYS", "AUDSYS", "GSMADMIN_INTERNAL", "DVSYS", "LBACSYS",
             "OJVMSYS", "DBSFWUSER", "GGSYS", "ANONYMOUS", "REMOTE_SCHEDULER_AGENT", "SYS$UMF", "DIP", "ORACLE_OCM", "XS$NULL");
@@ -175,6 +176,7 @@ public class SchemaInspector {
         return switch (type) {
             case POSTGRESQL -> PG_SYSTEM_SCHEMAS.contains(schema) || schema.startsWith("pg_");
             case ORACLE -> ORACLE_SYSTEM_SCHEMAS.contains(schema) || schema.startsWith("APEX_") || schema.startsWith("FLOWS_");
+            case CLICKHOUSE -> CLICKHOUSE_SYSTEM_SCHEMAS.contains(schema);
         };
     }
 
@@ -191,6 +193,7 @@ public class SchemaInspector {
             return switch (type) {
                 case POSTGRESQL -> "public";
                 case ORACLE -> md.getUserName();
+                case CLICKHOUSE -> "default";
             };
         }
         return normalizeIdentifier(md, schema.strip());

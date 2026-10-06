@@ -24,9 +24,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * Runs SQL against a registered database with row limits, timeouts and JSON-friendly value mapping.
  *
  * <p>Reads are fenced three times over, because no single fence holds on every engine: {@link SqlGuard} rejects
- * anything that is not plainly a single read, the transaction is declared read-only on the server, and the JDBC
- * connection is put in read-only mode and always rolled back. Writes go through {@link #execute} only, which
- * additionally requires the server-wide switch and a database that is not registered as read-only.
+ * anything that is not plainly a single read, transactional engines declare the transaction read-only on the
+ * server and roll it back, and the JDBC connection is put in read-only mode when the driver accepts it. Writes
+ * go through {@link #execute} only, which additionally requires the server-wide switch and a database that is
+ * not registered as read-only.
  */
 @Service
 public class QueryExecutor {
@@ -47,7 +48,8 @@ public class QueryExecutor {
     }
 
     /**
-     * Executes a read-only statement inside a read-only transaction that is always rolled back.
+     * Executes a read-only statement; transactional engines additionally use a read-only transaction that is
+     * always rolled back.
      */
     public QueryResult query(String databaseName, String sql) throws SQLException {
         return query(databaseName, sql, null);
@@ -59,16 +61,23 @@ public class QueryExecutor {
         int limit = effectiveLimit(maxRows);
         long started = System.nanoTime();
         try (Connection connection = dataSources.dataSource(databaseName).getConnection()) {
-            connection.setAutoCommit(false);
-            connection.setReadOnly(true);
-            beginReadOnlyTransaction(connection, definition);
+            boolean transactional = definition.type().transactional();
+            if (transactional) {
+                connection.setAutoCommit(false);
+            }
+            setReadOnly(connection, definition, true);
+            if (transactional) {
+                beginReadOnlyTransaction(connection, definition);
+            }
             try (Statement stmt = connection.createStatement()) {
                 configure(stmt, limit);
                 try (ResultSet rs = stmt.executeQuery(statement)) {
                     return readRows(rs, limit, started);
                 }
             } finally {
-                connection.rollback();
+                if (transactional) {
+                    connection.rollback();
+                }
             }
         }
     }
@@ -103,24 +112,42 @@ public class QueryExecutor {
         if (!settings.allowWrites()) {
             throw new IllegalStateException("Write statements are disabled. Start the server with db-mcp.query.allow-writes=true to enable execute_statement.");
         }
-        if (dataSources.definition(databaseName).readOnly()) {
+        DatabaseDefinition definition = dataSources.definition(databaseName);
+        if (definition.readOnly()) {
             throw new IllegalStateException("Database '" + databaseName + "' is registered as read-only. "
                     + "Call set_read_only with readOnly=false (after confirming with the user) to allow writes on it.");
         }
         String statement = SqlGuard.requireSingleStatement(sql);
         long started = System.nanoTime();
         try (Connection connection = dataSources.dataSource(databaseName).getConnection()) {
-            connection.setReadOnly(false);
-            connection.setAutoCommit(false);
+            boolean transactional = definition.type().transactional();
+            setReadOnly(connection, definition, false);
+            if (transactional) {
+                connection.setAutoCommit(false);
+            }
             try (Statement stmt = connection.createStatement()) {
                 configure(stmt, 0);
                 int affected = stmt.executeUpdate(statement);
-                connection.commit();
+                if (transactional) {
+                    connection.commit();
+                }
                 return new UpdateResult(affected, elapsedMillis(started));
             } catch (SQLException | RuntimeException e) {
-                connection.rollback();
+                if (transactional) {
+                    connection.rollback();
+                }
                 throw e;
             }
+        }
+    }
+
+    private void setReadOnly(Connection connection, DatabaseDefinition definition, boolean readOnly) throws SQLException {
+        try {
+            connection.setReadOnly(readOnly);
+        } catch (SQLException e) {
+            log.warn("Database '{}' rejected Connection.setReadOnly({}) ({}); relying on the SQL guard{}",
+                    definition.name(), readOnly, e.getMessage(),
+                    definition.type().transactional() ? " and transaction settings" : "");
         }
     }
 

@@ -19,7 +19,7 @@ spring:
           resource: false
           completion: false
         instructions: |
-          db-mcp gives access to several PostgreSQL and Oracle databases at once.
+          db-mcp gives access to several PostgreSQL, Oracle and ClickHouse databases at once.
           Workflow: call list_databases; if the database the user needs is missing, ask the user for its JDBC URL
           and credentials and call register_database. Credentials are stored encrypted on the server and reused
           in later sessions, so ask for them only once. Several databases often share one login/password:
@@ -27,7 +27,7 @@ spring:
           Explore with list_schemas / list_tables / describe_table, then query with run_query (read-only).
           Every database is read-only unless the user asked otherwise (register_database read_only=false or
           set_read_only); execute_statement additionally needs the server-wide allow-writes switch.
-          Use the SQL dialect of the target engine (PostgreSQL vs Oracle).
+          Use the SQL dialect of the target engine (PostgreSQL vs Oracle vs ClickHouse).
 
 db-mcp:
   vault:

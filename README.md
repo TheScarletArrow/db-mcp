@@ -2,7 +2,7 @@
 
 [![Publish Docker image](https://github.com/TheScarletArrow/db-mcp/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/TheScarletArrow/db-mcp/actions/workflows/docker-publish.yml)
 
-MCP (Model Context Protocol) server that gives an AI assistant access to **several PostgreSQL and Oracle
+MCP (Model Context Protocol) server that gives an AI assistant access to **several PostgreSQL, Oracle and ClickHouse
 databases at the same time**. Built with Spring Boot 4 / Spring AI 2 on Java 21.
 
 * Register any number of databases; each gets its own small HikariCP pool.
@@ -13,10 +13,10 @@ databases at the same time**. Built with Spring Boot 4 / Spring AI 2 on Java 21.
   login/password itself; otherwise the tool tells the assistant to ask.
 * Every database is **read-only by default** and a read-only database **cannot be written to at all**:
   the statement guard rejects DML/DDL, `SELECT ... INTO`, write-through-SELECT routines (`nextval`,
-  `lo_import`, `dblink`, `DBMS_*`/`UTL_*`, ...) and statements smuggled in after a `;`, the transaction is
-  declared read-only on the server, and the connection is rolled back. Writes are opt-in twice: server-wide
-  (`DB_MCP_ALLOW_WRITES=true`) and per database (`readOnly=false`), so production stays SELECT-only while a
-  dev database accepts changes. Details: [Read-only enforcement](#read-only-enforcement).
+  `lo_import`, `dblink`, ClickHouse `url`/`s3`/`file`, `DBMS_*`/`UTL_*`, ...) and statements smuggled in
+  after a `;`. On transactional engines the transaction is declared read-only on the server and rolled back.
+  Writes are opt-in twice: server-wide (`DB_MCP_ALLOW_WRITES=true`) and per database (`readOnly=false`), so
+  production stays SELECT-only while a dev database accepts changes. Details: [Read-only enforcement](#read-only-enforcement).
 * Transports: **stdio** (default, for Claude Desktop / Claude Code / IDE clients) and **streamable HTTP**.
 
 Russian cheat sheet: see [Шпаргалка](#шпаргалка-ru) at the end.
@@ -53,6 +53,7 @@ sentences you type in the chat; the tool the assistant calls is in brackets.
 |---------|--------------|
 | "Register jdbc:postgresql://localhost:5432/orders as orders-dev" | `register_database` → login/password requested once → stored under alias `orders-dev` → connection tested. |
 | "Add jdbc:oracle:thin:@//localhost:1521/ERP as erp-dev, same login as orders-dev" | `register_database` with `credentialAlias=orders-dev` → nothing is asked. Engine is inferred from the URL. |
+| "Add ClickHouse analytics at jdbc:ch://localhost:8123/default, same login as orders-dev" | `register_database` with `credentialAlias=orders-dev`; engine is inferred from the URL. |
 | "Save credentials alias `dev`: user app" | `save_credentials` (password asked) → later databases can reuse `dev`. |
 | "Register prod-orders at jdbc:postgresql://prod/orders, read-only" | Default anyway; `readOnly=true` is stored with the database. |
 | "Allow writes on orders-dev" | `set_read_only(orders-dev, false)`. Server must also run with `DB_MCP_ALLOW_WRITES=true`. |
@@ -66,6 +67,7 @@ URL formats:
 
 * PostgreSQL: `jdbc:postgresql://host:5432/dbname` (`?sslmode=require` etc. as usual)
 * Oracle: `jdbc:oracle:thin:@//host:1521/service_name` or `jdbc:oracle:thin:@host:1521:SID`
+* ClickHouse: `jdbc:ch://host:8123/database` or `jdbc:clickhouse:http://host:8123/database`
 * From Docker, a database on your machine is `host.docker.internal`, not `localhost`.
 
 Names and aliases: 1-64 chars of `a-z 0-9 . _ -`, starting with a letter or a digit, case-insensitive
@@ -75,15 +77,15 @@ that name.
 
 ## Working with data
 
-* "Which schemas are in orders-dev?" → `list_schemas`. System schemas (`pg_catalog`, `information_schema`,
-  `SYS`, `APEX_*`, ...) are hidden unless explicitly asked for.
+* "Which schemas are in orders-dev?" → `list_schemas`. System schemas/databases (`pg_catalog`,
+  `information_schema`, `SYS`, `APEX_*`, ClickHouse `system`, ...) are hidden unless explicitly asked for.
 * "Show tables in schema billing of orders-dev" → `list_tables` (LIKE pattern such as `ord%`, views included
   by default, 200 tables per call and up to 2000 on request; `truncated` tells you to narrow the pattern);
   "describe orders" → `describe_table` (columns with type/nullability/default, PK, FKs, indexes).
   Identifiers are case-normalized per engine; double-quote for exact match.
 * "How many orders per status this month?" → `run_query`. One read statement
-  (`SELECT`/`WITH`/`EXPLAIN`/`SHOW`/`VALUES`/`TABLE`) per call, executed in a read-only transaction that is
-  rolled back, 200 rows by default (`maxRows` up to 5000), long cells clipped. The result carries
+  (`SELECT`/`WITH`/`EXPLAIN`/`SHOW`/`VALUES`/`TABLE`) per call, executed read-only and rolled back on
+  transactional engines, 200 rows by default (`maxRows` up to 5000), long cells clipped. The result carries
   `columns`, `columnTypes`, `rows`, `rowCount`, `truncated` and `executionMillis`. Anything else (INSERT,
   DDL, `FOR UPDATE`, `SELECT ... INTO`, second statement after `;`) is rejected before it reaches the
   database - see [Read-only enforcement](#read-only-enforcement).
@@ -105,18 +107,21 @@ on every engine:
    * routines that write or reach outside the database even inside a plain `SELECT`: sequence bumps
      (`nextval`, `setval`), large objects and files (`lo_import`, `lo_export`, `pg_read_file`, H2's
      `CSVWRITE`/`FILE_WRITE`), server state (`pg_terminate_backend`, `pg_reload_conf`), sleeps and advisory
-     locks, calls that execute SQL passed to them as text (`dblink_exec`, `query_to_xml`), and every Oracle
-     `DBMS_*` / `UTL_*` / `OWA_*` package;
+     locks, calls that execute SQL passed to them as text (`dblink_exec`, `query_to_xml`), ClickHouse table
+     functions that read files, call networks or run executables (`url`, `s3`, `file`, `remote`,
+     `executable`, ...), and every Oracle `DBMS_*` / `UTL_*` / `OWA_*` package;
    * a second statement after a `;`, including when it is hidden in a comment, a dollar-quoted string or
      behind a backslash-escaped quote. String literals, quoted identifiers, `$tag$...$tag$`, Oracle
      `q'{...}'` and comments are blanked out before keywords are scanned, so `'drop me'` is data, not a
      verb - and anything that cannot be lexed unambiguously (an unterminated literal or comment, a
      backslash in front of a closing quote) is rejected rather than guessed.
-2. **A read-only transaction on the server** - `run_query` issues `SET TRANSACTION READ ONLY` and always
+2. **A read-only transaction on the server where the engine supports it** - `run_query` issues `SET TRANSACTION READ ONLY` and always
    rolls back. On PostgreSQL the server itself then refuses any write, which is what catches the one thing
    no name-based check can see: a user-defined function that writes when it is selected from. Engines that
    do not know the statement fall back to the other two fences (a one-off `WARN` line says so), and
-   `Connection.setReadOnly(true)` is set in every case - Oracle and H2 ignore it, PostgreSQL does not.
+   `Connection.setReadOnly(true)` is set on every query when the driver accepts it - Oracle and H2 ignore it,
+   PostgreSQL does not. ClickHouse has no equivalent transaction fence here, so `run_query` relies on the SQL
+   guard plus the driver's read-only hint.
 3. **The per-database flag** - `execute_statement` checks `readOnly` before it even looks at the SQL, so a
    read-only database never has a write statement built for it. Flip it with `set_read_only` (and the
    server must also run with `DB_MCP_ALLOW_WRITES=true`).
@@ -137,7 +142,7 @@ Optional parameters are marked `?`.
 | Tool | Parameters | Purpose |
 |------|------------|---------|
 | `list_databases` | - | Registered databases, engine, URL, credential alias, username, read-only flag (never passwords). |
-| `register_database` | `name`, `url`, `type?`, `credentialAlias?`, `username?`, `password?`, `description?`, `readOnly?` | Add/update a database. Credentials: reuse `credentialAlias`, pass `username`/`password`, or let the server elicit them. `type` is inferred from the URL when omitted. `readOnly` defaults to `true`; omitted on re-registration it keeps the stored value. Tests the connection and returns the result. |
+| `register_database` | `name`, `url`, `type?`, `credentialAlias?`, `username?`, `password?`, `description?`, `readOnly?` | Add/update a PostgreSQL, Oracle or ClickHouse database. Credentials: reuse `credentialAlias`, pass `username`/`password`, or let the server elicit them. `type` is inferred from the URL when omitted. `readOnly` defaults to `true`; omitted on re-registration it keeps the stored value. Tests the connection and returns the result. |
 | `set_read_only` | `name`, `readOnly` | Flip a database between read-only and writable without re-registering it. |
 | `remove_database` | `name` | Unregister a database and close its pool. Stored credentials are kept. |
 | `test_connection` | `name` | Product/version, authenticated user and current schema of a database. |
@@ -147,7 +152,7 @@ Optional parameters are marked `?`.
 | `list_schemas` | `database`, `includeSystem?` | Schemas of a database; system schemas hidden by default. |
 | `list_tables` | `database`, `schema?`, `namePattern?`, `includeViews?`, `limit?` | Tables and views of a schema (current schema when omitted), LIKE pattern, 200 per call and 2000 max. |
 | `describe_table` | `database`, `table`, `schema?` | Columns with type/nullability/default, primary key, foreign keys and indexes. |
-| `run_query` | `database`, `sql`, `maxRows?` | One read-only statement in a rolled-back read-only transaction, capped rows, clipped long cells. |
+| `run_query` | `database`, `sql`, `maxRows?` | One read-only statement, capped rows, clipped long cells. Transactional engines use a rolled-back read-only transaction. |
 | `execute_statement` | `database`, `sql` | One DML/DDL statement, only when `DB_MCP_ALLOW_WRITES=true` **and** the database is not read-only. |
 
 Every tool carries MCP tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
@@ -247,7 +252,8 @@ writable.
 * **A jlink'd runtime instead of a full JRE.** Stage 2 of the `Dockerfile` builds a ~60 MB Java runtime
   containing only the modules this application uses, on top of `alpine` rather than a Debian base.
   The module list is `jdeps` output plus what is reached reflectively — SASL (PostgreSQL's
-  SCRAM-SHA-256 handshake), JGSS, JDBC rowset/XA, the EC and PKCS#11 providers, JMX, zipfs. If you add a
+  SCRAM-SHA-256 handshake), JGSS, JDBC rowset/XA, HTTP/TLS client support for ClickHouse, the EC and
+  PKCS#11 providers, JMX, zipfs. If you add a
   dependency that needs more, `jlink --add-modules` in the `Dockerfile` is the place to declare it.
 * **Spring Boot layers instead of one fat jar.** The jar is split with
   `java -Djarmode=tools ... extract --layers --launcher` and copied in four `COPY` steps, least volatile
@@ -309,7 +315,7 @@ in Spring's relaxed form (`DB_MCP_QUERY_TIMEOUT=60s`).
 | `Database 'x' is registered as read-only ...` | "Allow writes on x" (`set_read_only`). |
 | `Only read-only statements (SELECT/WITH/EXPLAIN/SHOW) are allowed in run_query` | The statement does not start with one of the accepted read keywords, or it contains a second statement. Use `execute_statement` for writes. |
 | `'INTO' is not allowed in run_query ...` | `SELECT ... INTO` writes a table. Drop the INTO clause, or use `execute_statement` on a writable database. |
-| `Statement uses 'NEXTVAL' ...` (or `CSVWRITE`, `DBLINK`, `DBMS_...`) | A routine that writes or reaches outside the database; not allowed in `run_query` even inside a SELECT. |
+| `Statement uses 'NEXTVAL' ...` (or `CSVWRITE`, `DBLINK`, `DBMS_...`, `URL`, `S3`) | A routine or table function that writes or reaches outside the database; not allowed in `run_query` even inside a SELECT. |
 | `Statement contains 'LOAD', which is not allowed ...` | A column or alias collides with a keyword: double-quote it (`SELECT "load" FROM t`). |
 | `A backslash in front of a closing quote is ambiguous ...` | Write the literal with a doubled quote (`'it''s'`) or as `$$it's$$`. |
 | Claude Code does not see the server | `claude mcp list`; check the scope (`local` vs `user`) and that `java` is on PATH. Logs go to stderr: run the jar manually to see start-up errors. |
@@ -363,6 +369,7 @@ claude mcp list
 
 * «Зарегистрируй orders-dev: jdbc:postgresql://localhost:5432/orders» → спросит логин/пароль один раз.
 * «Добавь jdbc:oracle:thin:@//localhost:1521/ERP как erp-dev, креды те же, что у orders-dev» → ничего не спросит.
+* «Добавь ClickHouse jdbc:ch://localhost:8123/default как analytics-dev, креды те же» → тип определится по URL.
 * «Какие базы подключены?» / «Какие креды сохранены?» / «Проверь подключение к erp-dev».
 * «Пароль для алиаса orders-dev поменялся» → обновит и переподключит все базы с этим алиасом.
 * «Удали erp-dev».
@@ -373,7 +380,7 @@ claude mcp list
 
 **Только чтение**: все базы read-only по умолчанию. В такую базу нельзя ничего записать вообще:
 отклоняются INSERT/UPDATE/DELETE/DDL, `SELECT ... INTO`, функции-запись внутри SELECT (`nextval`,
-`lo_import`, `dblink`, `CSVWRITE`, пакеты `DBMS_*`/`UTL_*`) и второй запрос после `;` — в том числе
+`lo_import`, `dblink`, `CSVWRITE`, ClickHouse `url`/`s3`/`file`/`remote`, пакеты `DBMS_*`/`UTL_*`) и второй запрос после `;` — в том числе
 спрятанный в комментарии или в строковом литерале (типичные SQL-инъекции). Подробно:
 [Read-only enforcement](#read-only-enforcement). Включить запись для одной базы: «Разреши запись в orders-dev»
 + сервер запущен с `DB_MCP_ALLOW_WRITES=true`. Вернуть обратно: «Сделай orders-dev только для чтения».
